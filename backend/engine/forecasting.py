@@ -74,7 +74,7 @@ def _build_result(label, model_name, aic, history_df, fc_mean, ci, dates, curren
 
 # ── Court terme : ARIMA — 30 jours ───────────────────────────
 def forecast_short(symbol: str, currency: str = "USD") -> dict:
-    from data.market import get_ohlcv
+    from backend.data.market import get_ohlcv
     try:
         df   = get_ohlcv(symbol, period="1y", interval="1d")
         if df.empty or len(df) < 60:
@@ -98,7 +98,7 @@ def forecast_short(symbol: str, currency: str = "USD") -> dict:
 
 # ── Moyen terme : SARIMA hebdo — 3 mois ──────────────────────
 def forecast_mid(symbol: str, currency: str = "USD") -> dict:
-    from data.market import get_ohlcv
+    from backend.data.market import get_ohlcv
     try:
         df   = get_ohlcv(symbol, period="3y", interval="1d")
         if df.empty or len(df) < 120:
@@ -153,7 +153,7 @@ def forecast_mid(symbol: str, currency: str = "USD") -> dict:
 
 # ── Long terme : SARIMA annuel — 52 semaines ─────────────────
 def forecast_long(symbol: str, currency: str = "USD") -> dict:
-    from data.market import get_ohlcv
+    from backend.data.market import get_ohlcv
     try:
         df   = get_ohlcv(symbol, period="5y", interval="1wk")
         if df.empty or len(df) < 60:
