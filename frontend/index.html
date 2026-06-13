@@ -1,0 +1,952 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>StockSaaS — Analyse boursière intelligente</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg:       #080c14;
+  --bg2:      #0d1220;
+  --bg3:      #111829;
+  --card:     #131a2c;
+  --border:   #1e2a45;
+  --accent:   #3b82f6;
+  --accent2:  #6366f1;
+  --green:    #22d38a;
+  --red:      #ef4444;
+  --yellow:   #f59e0b;
+  --text:     #e1e8f5;
+  --muted:    #6b7fa3;
+  --font:     'Inter', system-ui, sans-serif;
+  --mono:     'JetBrains Mono', 'Fira Mono', monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:100vh;overflow-x:hidden}
+
+/* ── TOPBAR ── */
+.topbar{
+  position:sticky;top:0;z-index:100;
+  background:rgba(8,12,20,.92);backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:16px;padding:0 28px;height:58px;
+}
+.logo{font-size:1.1rem;font-weight:800;letter-spacing:-.5px;white-space:nowrap}
+.logo span{background:linear-gradient(90deg,#3b82f6,#6366f1);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.search-wrap{display:flex;gap:8px;flex:1;max-width:420px;margin:0 auto}
+.search-wrap input{
+  flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:8px;
+  color:var(--text);font-size:.9rem;padding:7px 14px;outline:none;
+  transition:border .2s;text-transform:uppercase;
+}
+.search-wrap input:focus{border-color:var(--accent)}
+.search-wrap input::placeholder{text-transform:none;color:var(--muted)}
+.btn{
+  background:var(--accent);border:none;border-radius:8px;color:#fff;
+  cursor:pointer;font-size:.85rem;font-weight:600;padding:7px 18px;
+  transition:opacity .2s;white-space:nowrap;
+}
+.btn:hover{opacity:.85}
+.btn.ghost{background:transparent;border:1px solid var(--border);color:var(--muted)}
+.btn.ghost:hover{border-color:var(--accent);color:var(--text)}
+.btn.danger{background:#ef444420;border:1px solid #ef444440;color:var(--red)}
+.topbar-right{display:flex;gap:8px;margin-left:auto;align-items:center}
+#userBadge{font-size:.78rem;color:var(--muted);display:none}
+#planBadge{font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:20px;display:none}
+.plan-free   {background:#1e2a4590;border:1px solid var(--border);color:var(--muted)}
+.plan-pro    {background:#3b82f620;border:1px solid #3b82f650;color:var(--accent)}
+.plan-premium{background:#6366f120;border:1px solid #6366f150;color:#a78bfa}
+
+/* ── LAYOUT ── */
+.layout{display:grid;grid-template-columns:240px 1fr;min-height:calc(100vh - 58px)}
+.sidebar{
+  background:var(--bg2);border-right:1px solid var(--border);
+  padding:24px 16px;display:flex;flex-direction:column;gap:4px;
+}
+.sidebar-section{font-size:.68rem;font-weight:700;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.1em;padding:16px 8px 8px}
+.nav-item{
+  display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;
+  cursor:pointer;font-size:.88rem;color:var(--muted);transition:all .15s;
+}
+.nav-item:hover{background:var(--bg3);color:var(--text)}
+.nav-item.active{background:linear-gradient(90deg,#3b82f615,#6366f115);
+  color:var(--text);border-left:2px solid var(--accent)}
+.nav-item .icon{font-size:1rem;width:20px;text-align:center}
+.watchlist-item{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:8px 10px;border-radius:6px;cursor:pointer;
+  font-size:.82rem;transition:background .15s;
+}
+.watchlist-item:hover{background:var(--bg3)}
+.watchlist-item .sym{font-weight:700;font-family:var(--mono);color:var(--text)}
+.watchlist-item .prc{font-family:var(--mono);font-size:.78rem;color:var(--muted)}
+.watchlist-item .rm{opacity:0;font-size:.7rem;color:var(--red);cursor:pointer}
+.watchlist-item:hover .rm{opacity:1}
+.wl-empty{font-size:.78rem;color:var(--muted);padding:8px 10px;font-style:italic}
+
+/* ── MAIN CONTENT ── */
+.content{padding:28px;overflow-y:auto}
+
+/* ── LANDING ── */
+#landingView{display:block}
+.hero{text-align:center;padding:80px 20px 40px}
+.hero h1{font-size:3rem;font-weight:800;line-height:1.1;letter-spacing:-1.5px;margin-bottom:16px}
+.hero h1 .grad{background:linear-gradient(90deg,#3b82f6,#6366f1,#8b5cf6);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero p{color:var(--muted);font-size:1.05rem;max-width:480px;margin:0 auto 32px;line-height:1.7}
+.hero-cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.btn-lg{padding:12px 28px;font-size:1rem;border-radius:10px}
+.features{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px;margin-top:60px}
+.feat-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:24px}
+.feat-card .feat-icon{font-size:1.8rem;margin-bottom:12px}
+.feat-card h3{font-size:.95rem;font-weight:700;margin-bottom:8px}
+.feat-card p{font-size:.82rem;color:var(--muted);line-height:1.6}
+
+/* ── PRICING ── */
+#pricingView{display:none}
+.pricing-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:20px;max-width:900px;margin:0 auto;padding-top:40px}
+.pricing-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:28px;position:relative}
+.pricing-card.popular{border-color:var(--accent)}
+.popular-badge{position:absolute;top:-12px;left:50%;transform:translateX(-50%);
+  background:var(--accent);border-radius:20px;font-size:.7rem;font-weight:700;
+  padding:3px 12px;white-space:nowrap}
+.plan-name{font-size:1rem;font-weight:700;margin-bottom:4px}
+.plan-price{font-size:2.5rem;font-weight:800;font-family:var(--mono);margin:12px 0}
+.plan-price sup{font-size:1rem;font-weight:400;vertical-align:super}
+.plan-price sub{font-size:.8rem;color:var(--muted);font-weight:400}
+.plan-features{list-style:none;margin:20px 0;display:flex;flex-direction:column;gap:10px}
+.plan-features li{font-size:.85rem;color:var(--muted);display:flex;align-items:center;gap:8px}
+.plan-features li::before{content:"✓";color:var(--green);font-weight:700;flex-shrink:0}
+.plan-features li.no::before{content:"✗";color:var(--red)}
+.plan-features li.no{opacity:.5}
+
+/* ── AUTH MODAL ── */
+.modal-overlay{
+  display:none;position:fixed;inset:0;background:#00000088;z-index:200;
+  align-items:center;justify-content:center;
+}
+.modal-overlay.open{display:flex}
+.modal{background:var(--bg2);border:1px solid var(--border);border-radius:16px;
+  padding:36px;width:100%;max-width:400px;position:relative}
+.modal h2{font-size:1.3rem;font-weight:700;margin-bottom:24px}
+.form-group{display:flex;flex-direction:column;gap:6px;margin-bottom:16px}
+.form-group label{font-size:.78rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.form-group input{
+  background:var(--bg3);border:1px solid var(--border);border-radius:8px;
+  color:var(--text);font-size:.9rem;padding:10px 14px;outline:none;transition:border .2s;
+}
+.form-group input:focus{border-color:var(--accent)}
+.modal-footer{margin-top:20px;text-align:center;font-size:.82rem;color:var(--muted)}
+.modal-footer a{color:var(--accent);cursor:pointer;text-decoration:none}
+.modal-close{position:absolute;top:16px;right:16px;background:none;border:none;
+  color:var(--muted);cursor:pointer;font-size:1.2rem}
+.error-msg{color:var(--red);font-size:.8rem;margin-top:8px;display:none}
+
+/* ── DASHBOARD ── */
+#dashView{display:none}
+.ticker-hero{
+  background:var(--card);border:1px solid var(--border);border-radius:16px;
+  padding:24px 28px;display:flex;align-items:center;gap:28px;flex-wrap:wrap;margin-bottom:24px;
+}
+.th-name h2{font-size:1.5rem;font-weight:800}
+.th-name .sub{color:var(--muted);font-size:.82rem;margin-top:4px}
+.th-price{margin-left:auto;text-align:right}
+.th-price .price{font-size:2rem;font-weight:800;font-family:var(--mono)}
+.th-price .chg{font-size:.88rem;margin-top:4px}
+.up{color:var(--green)}.dn{color:var(--red)}
+.badges{display:flex;gap:8px;flex-wrap:wrap}
+.badge{background:var(--bg3);border:1px solid var(--border);border-radius:20px;
+  font-size:.75rem;padding:3px 10px;color:var(--muted)}
+.badge strong{color:var(--text)}
+.wl-btn{background:none;border:1px solid var(--border);border-radius:8px;
+  color:var(--muted);cursor:pointer;font-size:.8rem;padding:6px 14px;transition:all .2s}
+.wl-btn:hover{border-color:var(--accent);color:var(--accent)}
+
+/* SCORE RING */
+.score-section{display:grid;grid-template-columns:180px 1fr;gap:20px;margin-bottom:24px;align-items:start}
+.score-main{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px;text-align:center}
+.ring-wrap{position:relative;width:120px;height:120px;margin:0 auto 16px}
+.ring-wrap svg{transform:rotate(-90deg)}
+.ring-bg{fill:none;stroke:var(--border);stroke-width:10}
+.ring-fg{fill:none;stroke-width:10;stroke-linecap:round;transition:stroke-dashoffset .8s ease}
+.ring-label{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.ring-num{font-size:1.6rem;font-weight:800;font-family:var(--mono);line-height:1}
+.ring-denom{font-size:.65rem;color:var(--muted)}
+.rating-badge{display:inline-block;border-radius:8px;font-size:.8rem;font-weight:700;padding:5px 14px;margin-bottom:4px}
+.score-breakdown{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px}
+.dim-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px}
+.dim-label{font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:10px}
+.dim-bar-track{height:5px;background:var(--bg3);border-radius:3px;margin-bottom:8px}
+.dim-bar{height:5px;border-radius:3px;transition:width .6s}
+.dim-val{font-size:1.1rem;font-weight:700;font-family:var(--mono)}
+
+/* TABS */
+.tabs{display:flex;gap:2px;margin-bottom:20px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.tab{background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
+  cursor:pointer;font-size:.85rem;font-weight:500;padding:9px 16px;margin-bottom:-1px;transition:all .2s}
+.tab:hover{color:var(--text)}
+.tab.active{border-bottom-color:var(--accent);color:var(--text);font-weight:700}
+.panel{display:none}.panel.active{display:block}
+
+/* CHART CARD */
+.chart-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:22px;margin-bottom:20px}
+.chart-card h3{font-size:.92rem;font-weight:700;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+.chart-meta{font-size:.75rem;color:var(--muted);margin-bottom:16px;display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+.model-tag{background:var(--bg3);border:1px solid var(--border);border-radius:4px;
+  font-family:var(--mono);font-size:.7rem;padding:2px 7px;color:var(--accent)}
+.chart-wrap{position:relative;height:300px}
+
+/* FC STATS */
+.fc-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:16px}
+.fc-stat .fc-label{font-size:.72rem;color:var(--muted);margin-bottom:4px}
+.fc-stat .fc-value{font-size:1.05rem;font-weight:700;font-family:var(--mono)}
+
+/* SIGNALS */
+.signals-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
+.sig-card{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px 16px}
+.sig-label{font-size:.7rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin-bottom:6px}
+.sig-value{font-size:.9rem;font-weight:600;display:flex;align-items:center;gap:6px}
+.sig-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+
+/* FUNDAS TABLE */
+.fundas-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px}
+.funda-item{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px 14px}
+.funda-label{font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}
+.funda-value{font-size:1rem;font-weight:700;font-family:var(--mono)}
+
+/* PAYWALL */
+.paywall{background:linear-gradient(135deg,#3b82f610,#6366f110);
+  border:1px solid #3b82f630;border-radius:12px;padding:28px;text-align:center;margin:12px 0}
+.paywall h4{font-size:1rem;font-weight:700;margin-bottom:8px}
+.paywall p{font-size:.85rem;color:var(--muted);margin-bottom:16px}
+
+/* LOADER */
+#loader{display:none;text-align:center;padding:60px 20px;color:var(--muted)}
+.spin{display:inline-block;width:34px;height:34px;border:3px solid var(--border);
+  border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;margin-bottom:14px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* TOAST */
+#toast{
+  position:fixed;bottom:24px;right:24px;background:var(--card);border:1px solid var(--border);
+  border-radius:10px;padding:12px 20px;font-size:.85rem;transform:translateY(80px);opacity:0;
+  transition:all .3s;z-index:500;pointer-events:none;
+}
+#toast.show{transform:translateY(0);opacity:1}
+
+/* RESPONSIVE */
+@media(max-width:768px){
+  .layout{grid-template-columns:1fr}
+  .sidebar{display:none}
+  .content{padding:16px}
+  .score-section{grid-template-columns:1fr}
+  .fc-stats{grid-template-columns:repeat(2,1fr)}
+  .hero h1{font-size:2rem}
+}
+</style>
+</head>
+<body>
+
+<!-- TOPBAR -->
+<div class="topbar">
+  <div class="logo">Stock<span>SaaS</span></div>
+  <div class="search-wrap">
+    <input id="tickerInput" placeholder="AAPL, TSLA, TTE.PA…" maxlength="12"/>
+    <button class="btn" onclick="doAnalysis()">Analyser</button>
+  </div>
+  <div class="topbar-right">
+    <span id="userBadge"></span>
+    <span id="planBadge"></span>
+    <button class="btn ghost" id="authBtn" onclick="openModal('login')">Connexion</button>
+    <button class="btn" id="signupBtn" onclick="openModal('register')" style="display:none">Inscription</button>
+    <button class="btn ghost" id="logoutBtn" onclick="logout()" style="display:none">Déconnexion</button>
+  </div>
+</div>
+
+<!-- LAYOUT -->
+<div class="layout">
+
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="nav-item active" onclick="showView('landing')">
+      <span class="icon">🏠</span> Accueil
+    </div>
+    <div class="nav-item" onclick="showView('pricing')">
+      <span class="icon">💎</span> Tarifs
+    </div>
+    <div class="sidebar-section">Watchlist</div>
+    <div id="watchlistSidebar"></div>
+  </div>
+
+  <!-- CONTENT -->
+  <div class="content">
+
+    <!-- LANDING -->
+    <div id="landingView">
+      <div class="hero">
+        <h1>Analyse boursière<br><span class="grad">intelligente & prédictive</span></h1>
+        <p>Scoring multi-critères, indicateurs techniques, et prévisions ARIMA/SARIMA à court, moyen et long terme.</p>
+        <div class="hero-cta">
+          <button class="btn btn-lg" onclick="openModal('register')">Commencer gratuitement</button>
+          <button class="btn ghost btn-lg" onclick="showView('pricing')">Voir les tarifs</button>
+        </div>
+        <div class="features">
+          <div class="feat-card">
+            <div class="feat-icon">🧠</div>
+            <h3>Score global /100</h3>
+            <p>Valorisation, croissance, santé financière, momentum et dividendes — synthétisés en un seul chiffre.</p>
+          </div>
+          <div class="feat-card">
+            <div class="feat-icon">📈</div>
+            <h3>Indicateurs techniques</h3>
+            <p>RSI, MACD, Bollinger, SMA/EMA, Stochastique — avec signaux clairs BUY/SELL.</p>
+          </div>
+          <div class="feat-card">
+            <div class="feat-icon">🔮</div>
+            <h3>Prévisions ARIMA/SARIMA</h3>
+            <p>Modèles statistiques calibrés automatiquement pour des forecasts à 30 jours, 3 mois et 1 an.</p>
+          </div>
+          <div class="feat-card">
+            <div class="feat-icon">📋</div>
+            <h3>Watchlist persistante</h3>
+            <p>Suivez vos titres favoris, retrouvez-les à chaque connexion.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PRICING -->
+    <div id="pricingView">
+      <div style="text-align:center;padding-top:40px">
+        <h2 style="font-size:1.8rem;font-weight:800">Choisissez votre plan</h2>
+        <p style="color:var(--muted);margin-top:8px;font-size:.9rem">Sans engagement, annulable à tout moment</p>
+      </div>
+      <div class="pricing-grid">
+        <div class="pricing-card">
+          <div class="plan-name">Free</div>
+          <div class="plan-price"><sup>€</sup>0<sub>/mois</sub></div>
+          <ul class="plan-features">
+            <li>3 analyses par jour</li>
+            <li>Score global /100</li>
+            <li>Prévision court terme (30j)</li>
+            <li>5 titres en watchlist</li>
+            <li class="no">Prévision moyen terme</li>
+            <li class="no">Prévision long terme</li>
+            <li class="no">Alertes email</li>
+          </ul>
+          <button class="btn ghost" style="width:100%" onclick="openModal('register')">Commencer</button>
+        </div>
+        <div class="pricing-card popular">
+          <div class="popular-badge">⭐ Le plus populaire</div>
+          <div class="plan-name">Pro</div>
+          <div class="plan-price"><sup>€</sup>9<sub>/mois</sub></div>
+          <ul class="plan-features">
+            <li>50 analyses par jour</li>
+            <li>Score global /100</li>
+            <li>Prévision court terme (30j)</li>
+            <li>Prévision moyen terme (3 mois)</li>
+            <li>Watchlist illimitée</li>
+            <li class="no">Prévision long terme</li>
+            <li class="no">Alertes email</li>
+          </ul>
+          <button class="btn" style="width:100%" onclick="subscribe('pro')">Passer Pro</button>
+        </div>
+        <div class="pricing-card">
+          <div class="plan-name">Premium</div>
+          <div class="plan-price"><sup>€</sup>29<sub>/mois</sub></div>
+          <ul class="plan-features">
+            <li>Analyses illimitées</li>
+            <li>Score global /100</li>
+            <li>Prévision court terme (30j)</li>
+            <li>Prévision moyen terme (3 mois)</li>
+            <li>Prévision long terme (1 an)</li>
+            <li>Watchlist illimitée</li>
+            <li>Alertes email (bientôt)</li>
+          </ul>
+          <button class="btn" style="width:100%;background:var(--accent2)" onclick="subscribe('premium')">Passer Premium</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- DASHBOARD -->
+    <div id="dashView">
+      <div id="loader"><div class="spin"></div><p id="loaderMsg">Analyse en cours…</p></div>
+
+      <div id="dashContent" style="display:none">
+        <div class="ticker-hero">
+          <div class="th-name">
+            <h2 id="dName"></h2>
+            <div class="sub" id="dSub"></div>
+          </div>
+          <div class="badges" id="dBadges"></div>
+          <button class="wl-btn" id="wlBtn" onclick="toggleWatchlist()">+ Watchlist</button>
+          <div class="th-price" style="margin-left:auto">
+            <div class="price" id="dPrice"></div>
+            <div class="chg" id="dChg"></div>
+          </div>
+        </div>
+
+        <!-- SCORE -->
+        <div class="score-section">
+          <div class="score-main">
+            <div class="ring-wrap">
+              <svg viewBox="0 0 120 120" width="120" height="120">
+                <circle class="ring-bg" cx="60" cy="60" r="50"/>
+                <circle class="ring-fg" id="ringFg" cx="60" cy="60" r="50"
+                  stroke-dasharray="314" stroke-dashoffset="314"/>
+              </svg>
+              <div class="ring-label">
+                <div class="ring-num" id="scoreNum">—</div>
+                <div class="ring-denom">/100</div>
+              </div>
+            </div>
+            <div class="rating-badge" id="ratingBadge">—</div>
+            <div style="font-size:.75rem;color:var(--muted);margin-top:6px" id="analystRec"></div>
+          </div>
+          <div class="score-breakdown" id="scoreBreakdown"></div>
+        </div>
+
+        <!-- TABS -->
+        <div class="tabs">
+          <button class="tab active" onclick="switchTab('chart')">📊 Cours & Signaux</button>
+          <button class="tab" onclick="switchTab('forecast')">🔮 Prévisions</button>
+          <button class="tab" onclick="switchTab('fundas')">📋 Fondamentaux</button>
+        </div>
+
+        <!-- PANEL : CHART -->
+        <div class="panel active" id="panel-chart">
+          <div class="chart-card">
+            <h3>Cours historique</h3>
+            <div class="chart-meta">
+              <span id="ohlcvInfo"></span>
+            </div>
+            <div class="chart-wrap"><canvas id="priceChart"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <h3>Signaux techniques</h3>
+            <div class="signals-grid" id="signalsGrid"></div>
+          </div>
+        </div>
+
+        <!-- PANEL : FORECAST -->
+        <div class="panel" id="panel-forecast">
+          <div id="shortFcCard" class="chart-card">
+            <h3>🔵 Court terme — 30 jours</h3>
+            <div class="chart-meta" id="shortMeta"></div>
+            <div class="chart-wrap"><canvas id="shortChart"></canvas></div>
+            <div class="fc-stats" id="shortStats"></div>
+          </div>
+          <div id="midFcCard" class="chart-card">
+            <h3>🟡 Moyen terme — 3 mois</h3>
+            <div class="chart-meta" id="midMeta"></div>
+            <div class="chart-wrap"><canvas id="midChart"></canvas></div>
+            <div class="fc-stats" id="midStats"></div>
+          </div>
+          <div id="longFcCard" class="chart-card">
+            <h3>🟠 Long terme — 1 an</h3>
+            <div class="chart-meta" id="longMeta"></div>
+            <div class="chart-wrap"><canvas id="longChart"></canvas></div>
+            <div class="fc-stats" id="longStats"></div>
+          </div>
+        </div>
+
+        <!-- PANEL : FONDAMENTAUX -->
+        <div class="panel" id="panel-fundas">
+          <p id="descText" style="color:var(--muted);font-size:.88rem;line-height:1.7;margin-bottom:20px"></p>
+          <div class="fundas-grid" id="fundasGrid"></div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /content -->
+</div><!-- /layout -->
+
+<!-- AUTH MODAL -->
+<div class="modal-overlay" id="authModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal()">✕</button>
+    <h2 id="modalTitle">Connexion</h2>
+    <div id="nameGroup" class="form-group" style="display:none">
+      <label>Prénom</label>
+      <input id="nameInput" type="text" placeholder="Jean Dupont"/>
+    </div>
+    <div class="form-group">
+      <label>Email</label>
+      <input id="emailInput" type="email" placeholder="jean@exemple.com"/>
+    </div>
+    <div class="form-group">
+      <label>Mot de passe</label>
+      <input id="passInput" type="password" placeholder="••••••••"/>
+    </div>
+    <div class="error-msg" id="authError"></div>
+    <button class="btn" style="width:100%;margin-top:8px" onclick="submitAuth()">Valider</button>
+    <div class="modal-footer" id="modalFooter">
+      Pas encore de compte ? <a onclick="openModal('register')">S'inscrire</a>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<script>
+// ══ STATE ═════════════════════════════════════════════════
+let token    = localStorage.getItem("token") || null;
+let userPlan = localStorage.getItem("plan")  || "free";
+let userEmail= localStorage.getItem("email") || null;
+let authMode = "login";
+let currentSymbol = null;
+let watchlist = [];
+let charts   = {};
+
+const API = "";   // même origine
+
+// ══ INIT ══════════════════════════════════════════════════
+window.addEventListener("DOMContentLoaded", () => {
+  refreshAuthUI();
+  if (token) loadWatchlist();
+  document.getElementById("tickerInput").addEventListener("keydown", e => {
+    if (e.key === "Enter") doAnalysis();
+  });
+});
+
+// ══ AUTH UI ═══════════════════════════════════════════════
+function refreshAuthUI() {
+  const loggedIn = !!token;
+  document.getElementById("authBtn").style.display    = loggedIn ? "none" : "";
+  document.getElementById("signupBtn").style.display  = loggedIn ? "none" : "";
+  document.getElementById("logoutBtn").style.display  = loggedIn ? "" : "none";
+
+  const badge = document.getElementById("planBadge");
+  const ub    = document.getElementById("userBadge");
+  if (loggedIn) {
+    badge.style.display = "";
+    badge.textContent   = userPlan.toUpperCase();
+    badge.className     = `plan-${userPlan}`;
+    ub.style.display    = "";
+    ub.textContent      = userEmail || "";
+  } else {
+    badge.style.display = "none";
+    ub.style.display    = "none";
+  }
+}
+
+function openModal(mode) {
+  authMode = mode;
+  document.getElementById("authModal").classList.add("open");
+  document.getElementById("modalTitle").textContent = mode === "login" ? "Connexion" : "Créer un compte";
+  document.getElementById("nameGroup").style.display = mode === "register" ? "" : "none";
+  document.getElementById("modalFooter").innerHTML  = mode === "login"
+    ? `Pas encore de compte ? <a onclick="openModal('register')">S'inscrire</a>`
+    : `Déjà un compte ? <a onclick="openModal('login')">Connexion</a>`;
+  document.getElementById("authError").style.display = "none";
+  document.getElementById("emailInput").value = "";
+  document.getElementById("passInput").value  = "";
+}
+function closeModal() {
+  document.getElementById("authModal").classList.remove("open");
+}
+
+async function submitAuth() {
+  const email = document.getElementById("emailInput").value.trim();
+  const pass  = document.getElementById("passInput").value;
+  const name  = document.getElementById("nameInput").value.trim();
+  if (!email || !pass) return;
+
+  const url  = authMode === "login" ? "/api/auth/login" : "/api/auth/register";
+  const body = authMode === "login" ? { email, password: pass } : { email, password: pass, full_name: name };
+
+  try {
+    const res  = await apiFetch(url, "POST", body, false);
+    token     = res.token;
+    userPlan  = res.plan;
+    userEmail = res.email;
+    localStorage.setItem("token", token);
+    localStorage.setItem("plan",  userPlan);
+    localStorage.setItem("email", userEmail);
+    closeModal();
+    refreshAuthUI();
+    loadWatchlist();
+    toast("Bienvenue ! 👋", "green");
+  } catch(e) {
+    const errEl = document.getElementById("authError");
+    errEl.textContent = e.message;
+    errEl.style.display = "";
+  }
+}
+
+function logout() {
+  token = userPlan = userEmail = null;
+  localStorage.removeItem("token");
+  localStorage.removeItem("plan");
+  localStorage.removeItem("email");
+  watchlist = [];
+  renderWatchlistSidebar();
+  refreshAuthUI();
+  showView("landing");
+  toast("Déconnecté");
+}
+
+// ══ NAVIGATION ════════════════════════════════════════════
+function showView(name) {
+  ["landing","pricing","dash"].forEach(v => {
+    document.getElementById(v + "View").style.display = "none";
+  });
+  document.getElementById(name + "View").style.display = "block";
+  document.querySelectorAll(".nav-item").forEach(el => el.classList.remove("active"));
+}
+
+function switchTab(name) {
+  document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+  document.querySelectorAll(".tab").forEach(b => b.classList.remove("active"));
+  document.getElementById("panel-" + name).classList.add("active");
+  event.target.classList.add("active");
+}
+
+// ══ ANALYSE ═══════════════════════════════════════════════
+async function doAnalysis() {
+  const sym = document.getElementById("tickerInput").value.trim().toUpperCase();
+  if (!sym) return;
+
+  currentSymbol = sym;
+  showView("dash");
+  document.getElementById("loader").style.display = "block";
+  document.getElementById("dashContent").style.display = "none";
+  setMsg("Récupération des données…");
+
+  try {
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const res = await fetch(`${API}/api/analysis/${sym}`, { headers });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Erreur serveur");
+    }
+    const data = await res.json();
+    renderDash(data);
+    document.getElementById("loader").style.display = "none";
+    document.getElementById("dashContent").style.display = "block";
+  } catch(e) {
+    document.getElementById("loader").style.display = "none";
+    toast("❌ " + e.message, "red");
+    showView("landing");
+  }
+}
+
+function setMsg(m) { document.getElementById("loaderMsg").textContent = m; }
+
+// ══ RENDER DASHBOARD ══════════════════════════════════════
+function renderDash(data) {
+  const f = data.fundamentals;
+  const s = data.score;
+
+  // Hero
+  const sign = (f.price > 0) ? "" : "";
+  document.getElementById("dName").textContent = `${data.symbol} — ${f.name}`;
+  document.getElementById("dSub").textContent  = `${f.sector} · ${f.industry} · ${f.exchange}`;
+  document.getElementById("dBadges").innerHTML = [
+    `<div class="badge">Cap <strong>${f.market_cap}</strong></div>`,
+    `<div class="badge">Devise <strong>${f.currency}</strong></div>`,
+    f.target ? `<div class="badge">Objectif analysts <strong>${f.target} ${f.currency}</strong></div>` : "",
+  ].join("");
+  document.getElementById("dPrice").textContent = `${f.price} ${f.currency}`;
+
+  // Watchlist button
+  const inWl = watchlist.includes(data.symbol);
+  const wlBtn = document.getElementById("wlBtn");
+  wlBtn.textContent = inWl ? "✓ Dans la watchlist" : "+ Watchlist";
+  wlBtn.style.borderColor = inWl ? "var(--green)" : "";
+  wlBtn.style.color = inWl ? "var(--green)" : "";
+
+  // Score ring
+  const pct = s.total / 100;
+  const circumference = 314;
+  const offset = circumference - pct * circumference;
+  const ringFg = document.getElementById("ringFg");
+  ringFg.style.stroke = s.color;
+  setTimeout(() => { ringFg.style.strokeDashoffset = offset; }, 50);
+  document.getElementById("scoreNum").textContent = s.total;
+  document.getElementById("scoreNum").style.color = s.color;
+  const rb = document.getElementById("ratingBadge");
+  rb.textContent = s.rating;
+  rb.style.background = s.color + "20";
+  rb.style.color = s.color;
+  rb.style.border = `1px solid ${s.color}50`;
+  document.getElementById("analystRec").textContent =
+    f.recommendation ? `Consensus analysts : ${f.recommendation.toUpperCase()}` : "";
+
+  // Score breakdown
+  const dimLabels = { valuation:"Valorisation", growth:"Croissance",
+    health:"Santé fin.", momentum:"Momentum", dividends:"Dividendes" };
+  const dimColors = ["#3b82f6","#22d38a","#6366f1","#f59e0b","#ec4899"];
+  document.getElementById("scoreBreakdown").innerHTML = Object.entries(s.breakdown).map(([k, v], i) => {
+    const col = dimColors[i % dimColors.length];
+    return `<div class="dim-card">
+      <div class="dim-label">${dimLabels[k] || k}</div>
+      <div class="dim-bar-track"><div class="dim-bar" style="width:${v/20*100}%;background:${col}"></div></div>
+      <div class="dim-val" style="color:${col}">${v}<span style="font-size:.65rem;color:var(--muted)">/20</span></div>
+    </div>`;
+  }).join("");
+
+  // Chart OHLCV
+  renderPriceChart(data.ohlcv, f.currency);
+
+  // Signals
+  const sigLabels = { trend:"Tendance", rsi:"RSI", macd:"MACD", bollinger:"Bollinger", stochastic:"Stochastique" };
+  document.getElementById("signalsGrid").innerHTML = Object.entries(data.signals).map(([k, s]) => {
+    const col = s.bullish === true ? "var(--green)" : s.bullish === false ? "var(--red)" : "var(--muted)";
+    return `<div class="sig-card">
+      <div class="sig-label">${sigLabels[k] || k}</div>
+      <div class="sig-value"><div class="sig-dot" style="background:${col}"></div>${s.value}</div>
+    </div>`;
+  }).join("");
+
+  // Forecasts
+  renderFcPanel(data.forecast, f.currency, data.plan);
+
+  // Fundas
+  renderFundas(f);
+}
+
+// ══ PRICE CHART ═══════════════════════════════════════════
+function renderPriceChart(ohlcv, currency) {
+  destroyChart("price");
+  if (!ohlcv.length) return;
+  const labels = ohlcv.map(d => d.date);
+  const closes = ohlcv.map(d => d.close);
+  document.getElementById("ohlcvInfo").textContent =
+    `${ohlcv[0].date} → ${ohlcv[ohlcv.length-1].date} · ${ohlcv.length} séances`;
+  const ctx = document.getElementById("priceChart").getContext("2d");
+  const grad = ctx.createLinearGradient(0, 0, 0, 300);
+  grad.addColorStop(0, "#3b82f630");
+  grad.addColorStop(1, "#3b82f600");
+  charts.price = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [{
+        label: `Cours (${currency})`,
+        data: closes,
+        borderColor: "#3b82f6",
+        borderWidth: 1.8,
+        pointRadius: 0,
+        fill: true,
+        backgroundColor: grad,
+        tension: 0.3,
+      }]
+    },
+    options: chartOpts(currency)
+  });
+}
+
+// ══ FORECAST CHARTS ═══════════════════════════════════════
+function renderFcPanel(fc, currency, plan) {
+  renderOneFc("short", fc.short, currency, "#3b82f6", "80%");
+
+  if (plan === "free" && !fc.mid?.forecast?.length) {
+    document.getElementById("midFcCard").innerHTML = paywall(
+      "Prévision moyen terme (3 mois)", "Disponible sur plan Pro — 9€/mois"
+    );
+  } else {
+    renderOneFc("mid", fc.mid, currency, "#f59e0b", "80%");
+  }
+
+  if (plan !== "premium" && !fc.long?.forecast?.length) {
+    document.getElementById("longFcCard").innerHTML = paywall(
+      "Prévision long terme (1 an)", "Disponible sur plan Premium — 29€/mois"
+    );
+  } else {
+    renderOneFc("long", fc.long, currency, "#8b5cf6", "90%");
+  }
+}
+
+function paywall(title, sub) {
+  return `<div class="paywall">
+    <h4>🔒 ${title}</h4>
+    <p>${sub}</p>
+    <button class="btn" onclick="showView('pricing')">Voir les tarifs</button>
+  </div>`;
+}
+
+function renderOneFc(prefix, d, currency, col, ciLabel) {
+  if (!d || !d.forecast?.length) {
+    document.getElementById(prefix + "FcCard").style.display = "none";
+    return;
+  }
+  document.getElementById(prefix + "FcCard").style.display = "";
+  document.getElementById(prefix + "Meta").innerHTML =
+    `<span class="model-tag">${d.model}</span><span>AIC : ${d.aic}</span><span>IC : ${ciLabel}</span>`;
+
+  const histDates = d.history.map(h => h.date);
+  const histPrices = d.history.map(h => h.price);
+  const fcDates = d.forecast.map(f => f.date);
+  const fcPrices = d.forecast.map(f => f.forecast);
+  const lower = d.forecast.map(f => f.lower);
+  const upper = d.forecast.map(f => f.upper);
+  const allLabels = [...histDates, ...fcDates];
+  const histFull  = [...histPrices, ...new Array(fcDates.length).fill(null)];
+  const fcFull    = [...new Array(histDates.length - 1).fill(null), histPrices[histPrices.length - 1], ...fcPrices];
+  const loFull    = [...new Array(histDates.length - 1).fill(null), histPrices[histPrices.length - 1], ...lower];
+  const hiFull    = [...new Array(histDates.length - 1).fill(null), histPrices[histPrices.length - 1], ...upper];
+
+  destroyChart(prefix);
+  const ctx = document.getElementById(prefix + "Chart").getContext("2d");
+  charts[prefix] = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: allLabels,
+      datasets: [
+        { label:"Cours réel", data:histFull, borderColor:"#e1e8f5", borderWidth:1.5, pointRadius:0, fill:false, tension:0.3 },
+        { label:"Prévision", data:fcFull, borderColor:col, borderWidth:2, pointRadius:0, fill:false, tension:0.3 },
+        { label:"Borne haute", data:hiFull, borderColor:col+"55", borderWidth:1, pointRadius:0, borderDash:[4,3], fill:false, tension:0.3 },
+        { label:"Borne basse", data:loFull, borderColor:col+"55", borderWidth:1, pointRadius:0, borderDash:[4,3], fill:"-1", backgroundColor:col+"15", tension:0.3 },
+      ]
+    },
+    options: chartOpts(currency, allLabels)
+  });
+
+  const chg = d.pct_change >= 0;
+  document.getElementById(prefix + "Stats").innerHTML = `
+    <div class="fc-stat"><div class="fc-label">Cours actuel</div><div class="fc-value">${d.last_price} ${currency}</div></div>
+    <div class="fc-stat"><div class="fc-label">Objectif fin période</div><div class="fc-value ${chg?'up':'dn'}">${d.end_forecast} ${currency}</div></div>
+    <div class="fc-stat"><div class="fc-label">Variation estimée</div><div class="fc-value ${chg?'up':'dn'}">${chg?'+':''}${d.pct_change}%</div></div>
+    <div class="fc-stat"><div class="fc-label">IC : ${ciLabel}</div>
+      <div class="fc-value">${d.forecast.at(-1).lower} – ${d.forecast.at(-1).upper}</div></div>`;
+}
+
+// ══ FONDAMENTAUX ══════════════════════════════════════════
+function renderFundas(f) {
+  document.getElementById("descText").textContent = f.description;
+  const items = [
+    ["P/E", f.pe ?? "—"], ["P/E fwd", f.fwd_pe ?? "—"], ["P/B", f.pb ?? "—"],
+    ["PEG", f.peg ?? "—"], ["EV/EBITDA", f.ev_ebitda ?? "—"],
+    ["ROE", f.roe], ["ROA", f.roa], ["Marge nette", f.margins],
+    ["Marge brute", f.gross_margins], ["Croiss. CA", f.rev_growth],
+    ["Croiss. BPA", f.eps_growth], ["Dette/Fonds propres", f.debt_eq ?? "—"],
+    ["Current Ratio", f.current_ratio ?? "—"], ["Rendement div.", f.div_yield],
+    ["Taux distribution", f.payout], ["52S Haut", f["52w_high"] ?? "—"],
+    ["52S Bas", f["52w_low"] ?? "—"], ["Nb. analysts", f.analysts ?? "—"],
+  ];
+  document.getElementById("fundasGrid").innerHTML = items.map(([l,v]) =>
+    `<div class="funda-item"><div class="funda-label">${l}</div><div class="funda-value">${v}</div></div>`
+  ).join("");
+}
+
+// ══ WATCHLIST ═════════════════════════════════════════════
+async function loadWatchlist() {
+  if (!token) return;
+  try {
+    const items = await apiFetch("/api/watchlist");
+    watchlist = items.map(i => i.symbol);
+    renderWatchlistSidebar(items);
+  } catch(e) {}
+}
+
+function renderWatchlistSidebar(items = []) {
+  const el = document.getElementById("watchlistSidebar");
+  if (!token) { el.innerHTML = `<div class="wl-empty">Connectez-vous pour votre watchlist</div>`; return; }
+  if (!items.length) { el.innerHTML = `<div class="wl-empty">Watchlist vide</div>`; return; }
+  el.innerHTML = items.map(i => `
+    <div class="watchlist-item" onclick="quickAnalyze('${i.symbol}')">
+      <span class="sym">${i.symbol}</span>
+      <span class="prc">${i.price ?? "—"}</span>
+      <span class="rm" onclick="event.stopPropagation();removeWl('${i.symbol}')">✕</span>
+    </div>`).join("");
+}
+
+async function toggleWatchlist() {
+  if (!token) { openModal("login"); return; }
+  if (!currentSymbol) return;
+  const inWl = watchlist.includes(currentSymbol);
+  try {
+    if (inWl) {
+      await apiFetch(`/api/watchlist/${currentSymbol}`, "DELETE");
+      watchlist = watchlist.filter(s => s !== currentSymbol);
+      toast(`${currentSymbol} retiré de la watchlist`);
+    } else {
+      await apiFetch(`/api/watchlist/${currentSymbol}`, "POST");
+      watchlist.push(currentSymbol);
+      toast(`${currentSymbol} ajouté à la watchlist ✓`, "green");
+    }
+    loadWatchlist();
+    // Refresh wl button
+    const wlBtn = document.getElementById("wlBtn");
+    const nowIn = watchlist.includes(currentSymbol);
+    wlBtn.textContent = nowIn ? "✓ Dans la watchlist" : "+ Watchlist";
+    wlBtn.style.borderColor = nowIn ? "var(--green)" : "";
+    wlBtn.style.color = nowIn ? "var(--green)" : "";
+  } catch(e) { toast("❌ " + e.message, "red"); }
+}
+
+async function removeWl(sym) {
+  try {
+    await apiFetch(`/api/watchlist/${sym}`, "DELETE");
+    watchlist = watchlist.filter(s => s !== sym);
+    loadWatchlist();
+    toast(`${sym} retiré`);
+  } catch(e) {}
+}
+
+function quickAnalyze(sym) {
+  document.getElementById("tickerInput").value = sym;
+  doAnalysis();
+}
+
+// ══ STRIPE ════════════════════════════════════════════════
+async function subscribe(plan) {
+  if (!token) { openModal("login"); return; }
+  try {
+    const res = await apiFetch(`/api/billing/checkout/${plan}`);
+    window.location.href = res.url;
+  } catch(e) { toast("❌ " + e.message, "red"); }
+}
+
+// ══ UTILS ═════════════════════════════════════════════════
+async function apiFetch(url, method = "GET", body = null, useToken = true) {
+  const headers = { "Content-Type": "application/json" };
+  if (useToken && token) headers["Authorization"] = `Bearer ${token}`;
+  const opts = { method, headers };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(API + url, opts);
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.detail || "Erreur");
+  return json;
+}
+
+function destroyChart(id) {
+  if (charts[id]) { charts[id].destroy(); delete charts[id]; }
+}
+
+function chartOpts(yLabel) {
+  return {
+    responsive: true, maintainAspectRatio: false,
+    interaction: { mode: "index", intersect: false },
+    plugins: {
+      legend: { labels: { color: "#6b7fa3", font: { size: 11 }, boxWidth: 14 } },
+      tooltip: {
+        backgroundColor: "#131a2c", borderColor: "#1e2a45", borderWidth: 1,
+        titleColor: "#e1e8f5", bodyColor: "#6b7fa3",
+        callbacks: { label: c => c.parsed.y !== null ? ` ${c.dataset.label}: ${c.parsed.y.toFixed(2)}` : null }
+      }
+    },
+    scales: {
+      x: { ticks: { color: "#6b7fa3", font: { size: 10 }, maxTicksLimit: 10, maxRotation: 0 }, grid: { color: "#1e2a45" } },
+      y: { ticks: { color: "#6b7fa3", font: { size: 10 } }, grid: { color: "#1e2a45" },
+           title: { display: true, text: yLabel, color: "#6b7fa3", font: { size: 11 } } }
+    }
+  };
+}
+
+let toastTimer;
+function toast(msg, type = "default") {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.style.borderColor = type === "green" ? "#22d38a50" : type === "red" ? "#ef444450" : "var(--border)";
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 3000);
+}
+</script>
+</body>
+</html>
