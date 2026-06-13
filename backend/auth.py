@@ -5,8 +5,8 @@ from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from backend.db import get_db
-from backend import models
+from db import get_db
+import models
 
 SECRET_KEY   = os.getenv("SECRET_KEY", "change-me-in-production-please")
 ALGORITHM    = "HS256"
@@ -67,19 +67,24 @@ def get_current_user_optional(
 
 
 # ── Rate limiting par plan ────────────────────────────────────
-PLAN_LIMITS = {"free": 3, "pro": 50, "premium": 999}
+PLAN_LIMITS = {"free": 20, "pro": 100, "premium": 999}
 
 def check_rate_limit(user: models.User, db: Session):
+    """Vérifie le quota sans l'incrémenter (incrémentation après succès)."""
     from datetime import date
     today = str(date.today())
     if user.analyses_date != today:
         user.analyses_date  = today
         user.analyses_today = 0
+        db.commit()
     limit = PLAN_LIMITS.get(user.plan, 3)
     if user.analyses_today >= limit:
         raise HTTPException(
             status_code=429,
             detail=f"Limite atteinte ({limit}/jour sur le plan {user.plan}). Upgradez pour continuer."
         )
+
+def increment_usage(user: models.User, db: Session):
+    """À appeler uniquement après une analyse réussie."""
     user.analyses_today += 1
     db.commit()
