@@ -6,14 +6,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
-import models
-from db import engine, get_db
-import auth
-import stripe_payments
-from data.market import get_ohlcv, get_info, get_price
-from engine.indicators import add_indicators, get_signals, serialize_ohlcv
-from engine.scoring import compute_score, get_fundamentals_summary
-from engine.forecasting import forecast_short, forecast_mid, forecast_long
+from backend import models
+from backend.db import engine, get_db
+import backend.auth as auth
+import backend.stripe_payments as stripe_payments
+from backend.data.market import get_ohlcv, get_info, get_price
+from backend.engine.indicators import add_indicators, get_signals, serialize_ohlcv
+from backend.engine.scoring import compute_score, get_fundamentals_summary
+from backend.engine.forecasting import forecast_short, forecast_mid, forecast_long
 
 # ── Init DB ──────────────────────────────────────────────────
 models.Base.metadata.create_all(bind=engine)
