@@ -1,17 +1,25 @@
 import os, json, time
-import requests
 import yfinance as yf
 import pandas as pd
 import warnings
 warnings.filterwarnings("ignore")
 
-# ── Session avec en-têtes navigateur (réduit le blocage Yahoo) ──
-_session = requests.Session()
-_session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept-Language": "en-US,en;q=0.9",
-})
+# ── Session avec impersonation TLS Chrome (contourne le blocage Yahoo) ──
+# Yahoo bloque les IP des datacenters cloud au niveau TLS ; curl_cffi
+# imite la signature TLS d'un vrai navigateur Chrome.
+try:
+    from curl_cffi import requests as cffi_requests
+    _session = cffi_requests.Session(impersonate="chrome")
+    print("[market] Using curl_cffi Chrome impersonation session")
+except Exception as e:
+    import requests
+    _session = requests.Session()
+    _session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    })
+    print(f"[market] curl_cffi unavailable ({e}), using plain requests session")
 
 # ── Cache Redis optionnel (dégradé gracieusement si absent) ──
 try:
