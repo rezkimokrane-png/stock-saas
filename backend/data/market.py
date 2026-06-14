@@ -4,22 +4,10 @@ import pandas as pd
 import warnings
 warnings.filterwarnings("ignore")
 
-# ── Session avec impersonation TLS Chrome (contourne le blocage Yahoo) ──
-# Yahoo bloque les IP des datacenters cloud au niveau TLS ; curl_cffi
-# imite la signature TLS d'un vrai navigateur Chrome.
-try:
-    from curl_cffi import requests as cffi_requests
-    _session = cffi_requests.Session(impersonate="chrome")
-    print("[market] Using curl_cffi Chrome impersonation session")
-except Exception as e:
-    import requests
-    _session = requests.Session()
-    _session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-    })
-    print(f"[market] curl_cffi unavailable ({e}), using plain requests session")
+# Note : yfinance >= 0.2.5x détecte automatiquement curl_cffi (installé via
+# requirements.txt) et l'utilise en interne pour contourner le blocage TLS
+# de Yahoo Finance sur les IP de datacenters cloud. Pas besoin de passer
+# de session manuellement.
 
 # ── Cache Redis optionnel (dégradé gracieusement si absent) ──
 try:
@@ -75,7 +63,7 @@ def get_ohlcv(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataF
         return df
 
     try:
-        df = _retry(lambda: yf.Ticker(symbol, session=_session).history(period=period, interval=interval))
+        df = _retry(lambda: yf.Ticker(symbol).history(period=period, interval=interval))
     except Exception as e:
         print(f"[get_ohlcv] {symbol} failed: {e}")
         return pd.DataFrame()
@@ -97,7 +85,7 @@ def get_info(symbol: str) -> dict:
         return cached
 
     try:
-        info = _retry(lambda: yf.Ticker(symbol, session=_session).info)
+        info = _retry(lambda: yf.Ticker(symbol).info)
     except Exception as e:
         print(f"[get_info] {symbol} failed: {e}")
         return {}
