@@ -21,24 +21,36 @@ except Exception:
 
 CACHE_TTL = 300  # 5 minutes
 
+# ── Cache mémoire local (fallback si pas de Redis) ────────────
+# Réduit les appels répétés à Yahoo Finance pendant les tests/dev,
+# évite de se faire bloquer (429/"Too Many Requests").
+_mem_cache: dict = {}
+
 
 def _cache_get(key: str):
-    if not REDIS_OK:
-        return None
-    try:
-        v = _redis.get(key)
-        return json.loads(v) if v else None
-    except Exception:
-        return None
+    if REDIS_OK:
+        try:
+            v = _redis.get(key)
+            return json.loads(v) if v else None
+        except Exception:
+            pass
+    entry = _mem_cache.get(key)
+    if entry:
+        value, expires_at = entry
+        if time.time() < expires_at:
+            return value
+        del _mem_cache[key]
+    return None
 
 
 def _cache_set(key: str, value, ttl=CACHE_TTL):
-    if not REDIS_OK:
-        return
-    try:
-        _redis.setex(key, ttl, json.dumps(value))
-    except Exception:
-        pass
+    if REDIS_OK:
+        try:
+            _redis.setex(key, ttl, json.dumps(value))
+            return
+        except Exception:
+            pass
+    _mem_cache[key] = (value, time.time() + ttl)
 
 
 def _retry(fn, attempts=3, delay=1.5):
@@ -53,10 +65,15 @@ def _retry(fn, attempts=3, delay=1.5):
     raise last_err
 
 
+_FAILED = "__FAILED__"
+
+
 # ── Données OHLCV ────────────────────────────────────────────
 def get_ohlcv(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
     key = f"ohlcv:{symbol}:{period}:{interval}"
     cached = _cache_get(key)
+    if cached == _FAILED:
+        return pd.DataFrame()
     if cached:
         df = pd.DataFrame(cached)
         df.index = pd.to_datetime(df.index)
@@ -66,9 +83,11 @@ def get_ohlcv(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataF
         df = _retry(lambda: yf.Ticker(symbol).history(period=period, interval=interval))
     except Exception as e:
         print(f"[get_ohlcv] {symbol} failed: {e}")
+        _cache_set(key, _FAILED, ttl=20)  # évite de re-spammer Yahoo pendant 20s
         return pd.DataFrame()
 
     if df.empty:
+        _cache_set(key, _FAILED, ttl=20)
         return df
 
     _cache_set(key, df.reset_index().assign(
@@ -81,6 +100,8 @@ def get_ohlcv(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataF
 def get_info(symbol: str) -> dict:
     key = f"info:{symbol}"
     cached = _cache_get(key)
+    if cached == _FAILED:
+        return {}
     if cached:
         return cached
 
@@ -88,9 +109,11 @@ def get_info(symbol: str) -> dict:
         info = _retry(lambda: yf.Ticker(symbol).info)
     except Exception as e:
         print(f"[get_info] {symbol} failed: {e}")
+        _cache_set(key, _FAILED, ttl=20)
         return {}
 
     if not info or not isinstance(info, dict):
+        _cache_set(key, _FAILED, ttl=20)
         return {}
 
     _cache_set(key, info, ttl=3600)
