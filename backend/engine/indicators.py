@@ -76,7 +76,7 @@ def get_signals(df: pd.DataFrame) -> dict:
         signals["macd"] = {"value": "Croisement baissier", "bullish": False}
     else:
         sign = "+" if last["MACD_hist"] > 0 else "-"
-        signals["macd"] = {"value": f"Histogramme {sign}", "bullish": last["MACD_hist"] > 0}
+        signals["macd"] = {"value": f"Histogramme {sign}", "bullish": bool(last["MACD_hist"] > 0)}
 
     # Bollinger
     close = last["Close"]

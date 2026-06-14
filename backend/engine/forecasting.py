@@ -40,33 +40,38 @@ def _dates(last: pd.Timestamp, steps: int, freq: str) -> list[str]:
     ]
 
 
-def _build_result(label, model_name, aic, history_df, fc_mean, ci, dates, currency, ci_level):
+def _build_result(label, model_name, aic, history_series, fc_mean, ci, dates, currency, ci_level):
+    # fc_mean / ci peuvent être des ndarray numpy (fit sur tableau brut)
+    # ou des Series/DataFrame pandas (fit sur série indexée) — on uniformise.
+    fc_mean = np.asarray(fc_mean).reshape(-1)
+    ci      = np.asarray(ci)
+
     hist = [
         {"date": d.strftime("%Y-%m-%d"), "price": round(float(v), 2)}
-        for d, v in history_df.items()
+        for d, v in history_series.items()
     ]
     fc = [
         {
             "date":     dates[i],
             "forecast": round(float(fc_mean[i]), 2),
-            "lower":    round(float(ci.iloc[i, 0]), 2),
-            "upper":    round(float(ci.iloc[i, 1]), 2),
+            "lower":    round(float(ci[i, 0]), 2),
+            "upper":    round(float(ci[i, 1]), 2),
         }
         for i in range(len(dates))
     ]
-    last_price = history_df.iloc[-1]
-    end_price  = fc_mean[-1]
+    last_price = float(history_series.iloc[-1])
+    end_price  = float(fc_mean[-1])
     pct_change = (end_price - last_price) / last_price * 100
 
     return {
         "label":        label,
         "model":        model_name,
-        "aic":          round(aic, 1),
+        "aic":          round(float(aic), 1),
         "ci_level":     ci_level,
         "currency":     currency,
-        "last_price":   round(float(last_price), 2),
-        "end_forecast": round(float(end_price), 2),
-        "pct_change":   round(float(pct_change), 2),
+        "last_price":   round(last_price, 2),
+        "end_forecast": round(end_price, 2),
+        "pct_change":   round(pct_change, 2),
         "history":      hist,
         "forecast":     fc,
     }
@@ -109,16 +114,16 @@ def forecast_mid(symbol: str, currency: str = "USD") -> dict:
         fit   = model.fit(disp=False, maxiter=100)
         steps = 90
         fc_obj  = fit.get_forecast(steps)
-        fc_mean = np.exp(fc_obj.predicted_mean)
-        ci      = np.exp(fc_obj.conf_int(alpha=0.20))
+        fc_mean = np.exp(np.asarray(fc_obj.predicted_mean).reshape(-1))
+        ci      = np.exp(np.asarray(fc_obj.conf_int(alpha=0.20)))
         dates   = _dates(df.index[-1], steps, "B")
 
         # Agréger en semaines pour le graphique
         fc_df = pd.DataFrame({
             "date":     pd.to_datetime(dates),
-            "forecast": fc_mean.values,
-            "lower":    ci.iloc[:, 0].values,
-            "upper":    ci.iloc[:, 1].values,
+            "forecast": fc_mean,
+            "lower":    ci[:, 0],
+            "upper":    ci[:, 1],
         }).set_index("date").resample("W").mean()
 
         history = df["Close"].resample("W").last().tail(52)
@@ -132,17 +137,17 @@ def forecast_mid(symbol: str, currency: str = "USD") -> dict:
             for d, r in fc_df.iterrows()
         ]
 
-        last_price = history.iloc[-1]
-        end_price  = fc_df["forecast"].iloc[-1]
+        last_price = float(history.iloc[-1])
+        end_price  = float(fc_df["forecast"].iloc[-1])
         return {
             "label":        "Moyen terme — 3 mois",
             "model":        "SARIMA(1,1,1)(1,0,1,5)",
-            "aic":          round(fit.aic, 1),
+            "aic":          round(float(fit.aic), 1),
             "ci_level":     "80%",
             "currency":     currency,
-            "last_price":   round(float(last_price), 2),
-            "end_forecast": round(float(end_price), 2),
-            "pct_change":   round((float(end_price) - float(last_price)) / float(last_price) * 100, 2),
+            "last_price":   round(last_price, 2),
+            "end_forecast": round(end_price, 2),
+            "pct_change":   round((end_price - last_price) / last_price * 100, 2),
             "history":      hist,
             "forecast":     fc_list,
         }
