@@ -104,7 +104,11 @@ def analysis(
     info = get_info(sym)
     price = info.get("regularMarketPrice") or info.get("currentPrice")
     if not price:
-        raise HTTPException(404, f"Ticker {sym} introuvable")
+        raise HTTPException(
+            503,
+            f"Impossible de récupérer les données pour {sym}. "
+            f"Soit le ticker est invalide, soit Yahoo Finance limite temporairement les requêtes — réessayez dans 10-20 secondes."
+        )
 
     df = get_ohlcv(sym)
     if df.empty:
