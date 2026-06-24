@@ -1,31 +1,41 @@
-import os, json, time
+import os, json, time, random
 import yfinance as yf
 import pandas as pd
 import warnings
 warnings.filterwarnings("ignore")
 
-# Note : yfinance >= 0.2.5x détecte automatiquement curl_cffi (installé via
-# requirements.txt) et l'utilise en interne pour contourner le blocage TLS
-# de Yahoo Finance sur les IP de datacenters cloud. Pas besoin de passer
-# de session manuellement.
+# ── Headers pour contourner le blocage Yahoo Finance ──────────
+# Yahoo bloque les IPs de datacenter cloud. On simule un vrai navigateur.
+import requests
+from requests import Session
 
-# ── Cache Redis optionnel (dégradé gracieusement si absent) ──
+def _make_session():
+    s = Session()
+    s.headers.update({
+        "User-Agent": random.choice([
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        ]),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+    })
+    return s
+
+# ── Cache Redis optionnel ────────────────────────────────────
 try:
     import redis
     _redis = redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
     _redis.ping()
     REDIS_OK = True
 except Exception:
-    _redis   = None
+    _redis = None
     REDIS_OK = False
 
-CACHE_TTL = 300  # 5 minutes
-
-# ── Cache mémoire local (fallback si pas de Redis) ────────────
-# Réduit les appels répétés à Yahoo Finance pendant les tests/dev,
-# évite de se faire bloquer (429/"Too Many Requests").
+CACHE_TTL = 300
 _mem_cache: dict = {}
-
 
 def _cache_get(key: str):
     if REDIS_OK:
@@ -42,7 +52,6 @@ def _cache_get(key: str):
         del _mem_cache[key]
     return None
 
-
 def _cache_set(key: str, value, ttl=CACHE_TTL):
     if REDIS_OK:
         try:
@@ -52,9 +61,7 @@ def _cache_set(key: str, value, ttl=CACHE_TTL):
             pass
     _mem_cache[key] = (value, time.time() + ttl)
 
-
-def _retry(fn, attempts=3, delay=1.5):
-    """Réessaie en cas d'erreur transitoire (rate limit Yahoo, JSON cassé)."""
+def _retry(fn, attempts=3, delay=2.0):
     last_err = None
     for i in range(attempts):
         try:
@@ -64,9 +71,7 @@ def _retry(fn, attempts=3, delay=1.5):
             time.sleep(delay * (i + 1))
     raise last_err
 
-
 _FAILED = "__FAILED__"
-
 
 # ── Données OHLCV ────────────────────────────────────────────
 def get_ohlcv(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
@@ -80,10 +85,12 @@ def get_ohlcv(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataF
         return df
 
     try:
-        df = _retry(lambda: yf.Ticker(symbol).history(period=period, interval=interval))
+        session = _make_session()
+        ticker  = yf.Ticker(symbol, session=session)
+        df      = _retry(lambda: ticker.history(period=period, interval=interval))
     except Exception as e:
         print(f"[get_ohlcv] {symbol} failed: {e}")
-        _cache_set(key, _FAILED, ttl=20)  # évite de re-spammer Yahoo pendant 20s
+        _cache_set(key, _FAILED, ttl=20)
         return pd.DataFrame()
 
     if df.empty:
@@ -95,7 +102,6 @@ def get_ohlcv(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataF
     ).set_index("Date").to_dict(), ttl=120)
     return df
 
-
 # ── Infos fondamentales ───────────────────────────────────────
 def get_info(symbol: str) -> dict:
     key = f"info:{symbol}"
@@ -106,7 +112,9 @@ def get_info(symbol: str) -> dict:
         return cached
 
     try:
-        info = _retry(lambda: yf.Ticker(symbol).info)
+        session = _make_session()
+        ticker  = yf.Ticker(symbol, session=session)
+        info    = _retry(lambda: ticker.info)
     except Exception as e:
         print(f"[get_info] {symbol} failed: {e}")
         _cache_set(key, _FAILED, ttl=20)
@@ -118,7 +126,6 @@ def get_info(symbol: str) -> dict:
 
     _cache_set(key, info, ttl=3600)
     return info
-
 
 # ── Prix temps réel ───────────────────────────────────────────
 def get_price(symbol: str) -> float | None:
