@@ -1,33 +1,41 @@
-import os, json, time, random
-import yfinance as yf
+import os, json, time
 import pandas as pd
 import warnings
 warnings.filterwarnings("ignore")
 
-# ── Headers pour contourner le blocage Yahoo Finance ──────────
-# Yahoo bloque les IPs de datacenter cloud. On simule un vrai navigateur.
-import requests
-from requests import Session
+# ── curl_cffi session (imite TLS fingerprint Chrome) ─────────
+# C'est la seule méthode fiable pour contourner le blocage
+# Yahoo Finance sur les IPs de datacenter (Render, AWS, etc.)
+try:
+    from curl_cffi.requests import Session as CurlSession
+    CURL_OK = True
+except ImportError:
+    CURL_OK = False
 
-def _make_session():
-    s = Session()
-    s.headers.update({
-        "User-Agent": random.choice([
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        ]),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-    })
+def _make_curl_session():
+    """Session curl_cffi qui imite Chrome 120 — passe le blocage TLS Yahoo."""
+    if not CURL_OK:
+        return None
+    s = CurlSession(impersonate="chrome120")
     return s
 
-# ── Cache Redis optionnel ────────────────────────────────────
+# ── yfinance avec session curl_cffi ──────────────────────────
+import yfinance as yf
+
+def _ticker(symbol: str):
+    """Crée un Ticker yfinance avec session curl_cffi si disponible."""
+    session = _make_curl_session()
+    if session:
+        return yf.Ticker(symbol, session=session)
+    return yf.Ticker(symbol)
+
+# ── Cache Redis optionnel ─────────────────────────────────────
 try:
     import redis
-    _redis = redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
+    _redis = redis.from_url(
+        os.getenv("REDIS_URL", "redis://localhost:6379"),
+        decode_responses=True
+    )
     _redis.ping()
     REDIS_OK = True
 except Exception:
@@ -73,7 +81,7 @@ def _retry(fn, attempts=3, delay=2.0):
 
 _FAILED = "__FAILED__"
 
-# ── Données OHLCV ────────────────────────────────────────────
+# ── Données OHLCV ─────────────────────────────────────────────
 def get_ohlcv(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
     key = f"ohlcv:{symbol}:{period}:{interval}"
     cached = _cache_get(key)
@@ -85,9 +93,8 @@ def get_ohlcv(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataF
         return df
 
     try:
-        session = _make_session()
-        ticker  = yf.Ticker(symbol, session=session)
-        df      = _retry(lambda: ticker.history(period=period, interval=interval))
+        t = _ticker(symbol)
+        df = _retry(lambda: t.history(period=period, interval=interval))
     except Exception as e:
         print(f"[get_ohlcv] {symbol} failed: {e}")
         _cache_set(key, _FAILED, ttl=20)
@@ -112,9 +119,8 @@ def get_info(symbol: str) -> dict:
         return cached
 
     try:
-        session = _make_session()
-        ticker  = yf.Ticker(symbol, session=session)
-        info    = _retry(lambda: ticker.info)
+        t = _ticker(symbol)
+        info = _retry(lambda: t.info)
     except Exception as e:
         print(f"[get_info] {symbol} failed: {e}")
         _cache_set(key, _FAILED, ttl=20)
