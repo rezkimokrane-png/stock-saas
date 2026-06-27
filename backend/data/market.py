@@ -3,7 +3,6 @@ import pandas as pd
 import warnings
 warnings.filterwarnings("ignore")
 
-# ── curl_cffi ────────────────────────────────────────────────
 try:
     from curl_cffi.requests import Session as CurlSession
     CURL_OK = True
@@ -26,10 +25,7 @@ def _ticker(symbol: str):
 # ── Cache ─────────────────────────────────────────────────────
 try:
     import redis
-    _redis = redis.from_url(
-        os.getenv("REDIS_URL", "redis://localhost:6379"),
-        decode_responses=True
-    )
+    _redis = redis.from_url(os.getenv("REDIS_URL","redis://localhost:6379"), decode_responses=True)
     _redis.ping()
     REDIS_OK = True
 except Exception:
@@ -39,7 +35,7 @@ except Exception:
 CACHE_TTL = 300
 _mem_cache: dict = {}
 
-def _cache_get(key: str):
+def _cache_get(key):
     if REDIS_OK:
         try:
             v = _redis.get(key)
@@ -48,13 +44,13 @@ def _cache_get(key: str):
             pass
     entry = _mem_cache.get(key)
     if entry:
-        value, expires_at = entry
-        if time.time() < expires_at:
+        value, exp = entry
+        if time.time() < exp:
             return value
         del _mem_cache[key]
     return None
 
-def _cache_set(key: str, value, ttl=CACHE_TTL):
+def _cache_set(key, value, ttl=CACHE_TTL):
     if REDIS_OK:
         try:
             _redis.setex(key, ttl, json.dumps(value))
@@ -75,57 +71,73 @@ def _retry(fn, attempts=3, delay=2.0):
             time.sleep(delay * (i + 1))
     raise last_err
 
-# ── Fallback Stooq (données OHLCV uniquement) ─────────────────
-def _stooq_symbol(symbol: str) -> str:
-    """Convertit le ticker Yahoo vers format Stooq."""
+# ── Stooq symbol ─────────────────────────────────────────────
+def _stooq_sym(symbol: str) -> str:
     sym = symbol.upper()
-    # Actions françaises : MC.PA → MC.FR
-    if sym.endswith(".PA"):
-        return sym.replace(".PA", ".FR")
-    # Actions US : pas de suffixe
+    if sym.endswith(".PA"): return sym.replace(".PA", ".FR")
+    if sym.endswith(".L"):  return sym.replace(".L", ".UK")
     return sym
 
-def _get_ohlcv_stooq(symbol: str) -> pd.DataFrame:
-    """Fallback Stooq — pas de blocage IP, données OHLCV fiables."""
+# ── OHLCV via Stooq ──────────────────────────────────────────
+def _ohlcv_stooq(symbol: str) -> pd.DataFrame:
     try:
-        stooq_sym = _stooq_symbol(symbol)
-        df = pd.read_csv(
-            f"https://stooq.com/q/d/l/?s={stooq_sym.lower()}&i=d",
-            parse_dates=["Date"],
-            index_col="Date"
-        )
-        if df.empty or len(df) < 10:
+        s = _stooq_sym(symbol)
+        url = f"https://stooq.com/q/d/l/?s={s.lower()}&i=d"
+        df = pd.read_csv(url, parse_dates=["Date"], index_col="Date")
+        if df.empty or len(df) < 5:
             return pd.DataFrame()
-        # Renomme les colonnes au format yfinance
         df.columns = [c.title() for c in df.columns]
         df = df.sort_index()
-        # Garde seulement la dernière année
         cutoff = pd.Timestamp.now() - pd.DateOffset(years=1)
         df = df[df.index >= cutoff]
-        print(f"[stooq] {symbol} OK — {len(df)} séances")
+        print(f"[stooq ohlcv] {symbol} OK — {len(df)} rows")
         return df
     except Exception as e:
-        print(f"[stooq] {symbol} failed: {e}")
+        print(f"[stooq ohlcv] {symbol} error: {e}")
         return pd.DataFrame()
 
-# ── Fallback info via Stooq (prix seulement) ─────────────────
-def _get_price_stooq(symbol: str) -> float | None:
-    """Récupère le prix actuel via Stooq."""
+# ── Info via Stooq (reconstruit depuis OHLCV) ─────────────────
+def _info_stooq(symbol: str) -> dict:
+    """Construit un dict info minimal depuis les données Stooq."""
     try:
-        stooq_sym = _stooq_symbol(symbol)
-        df = pd.read_csv(
-            f"https://stooq.com/q/d/l/?s={stooq_sym.lower()}&i=d",
-            parse_dates=["Date"],
-            index_col="Date"
-        )
+        s = _stooq_sym(symbol)
+        url = f"https://stooq.com/q/d/l/?s={s.lower()}&i=d"
+        df = pd.read_csv(url, parse_dates=["Date"], index_col="Date")
         if df.empty:
-            return None
+            return {}
         df.columns = [c.title() for c in df.columns]
-        return float(df["Close"].iloc[-1])
-    except Exception:
-        return None
+        df = df.sort_index()
 
-# ── OHLCV principal ───────────────────────────────────────────
+        price   = float(df["Close"].iloc[-1])
+        prev    = float(df["Close"].iloc[-2]) if len(df) > 1 else price
+        chg_pct = round((price - prev) / prev * 100, 2) if prev else 0
+        high52  = round(float(df["Close"].tail(252).max()), 2)
+        low52   = round(float(df["Close"].tail(252).min()), 2)
+
+        # Devise selon suffixe
+        currency = "USD"
+        if symbol.endswith(".PA"): currency = "EUR"
+        elif symbol.endswith(".L"): currency = "GBP"
+
+        print(f"[stooq info] {symbol} price={price} chg={chg_pct}%")
+        return {
+            "symbol":             symbol,
+            "longName":           symbol,
+            "shortName":          symbol,
+            "regularMarketPrice": price,
+            "currentPrice":       price,
+            "previousClose":      prev,
+            "regularMarketChangePercent": chg_pct,
+            "currency":           currency,
+            "fiftyTwoWeekHigh":   high52,
+            "fiftyTwoWeekLow":    low52,
+            "exchange":           "Stooq",
+        }
+    except Exception as e:
+        print(f"[stooq info] {symbol} error: {e}")
+        return {}
+
+# ── OHLCV public ─────────────────────────────────────────────
 def get_ohlcv(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
     key = f"ohlcv:{symbol}:{period}:{interval}"
     cached = _cache_get(key)
@@ -138,32 +150,36 @@ def get_ohlcv(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataF
 
     df = pd.DataFrame()
 
-    # Tentative 1 : yfinance + curl_cffi
+    # 1. yfinance + curl_cffi
     try:
-        t = _ticker(symbol)
+        t  = _ticker(symbol)
         df = _retry(lambda: t.history(period=period, interval=interval))
         if not df.empty:
-            print(f"[yfinance] {symbol} OK")
+            print(f"[yfinance ohlcv] {symbol} OK")
     except Exception as e:
-        print(f"[yfinance] {symbol} failed: {e}")
+        print(f"[yfinance ohlcv] {symbol} failed: {e}")
 
-    # Tentative 2 : Stooq si yfinance échoue
+    # 2. Stooq fallback
     if df.empty:
-        print(f"[fallback] Tentative Stooq pour {symbol}")
-        df = _get_ohlcv_stooq(symbol)
+        df = _ohlcv_stooq(symbol)
 
     if df.empty:
         _cache_set(key, _FAILED, ttl=20)
         return df
 
-    _cache_set(key, df.reset_index().assign(
-        Date=lambda x: x.iloc[:, 0].astype(str) if "Date" not in df.reset_index().columns
-        else x["Date"].astype(str) if x["Date"].dtype == "object"
-        else x["Date"].dt.strftime("%Y-%m-%d")
-    ).set_index("Date").to_dict(), ttl=120)
+    try:
+        idx = df.reset_index()
+        date_col = idx.columns[0]
+        serialized = idx.assign(
+            **{date_col: idx[date_col].astype(str)}
+        ).set_index(date_col).to_dict()
+        _cache_set(key, serialized, ttl=120)
+    except Exception as e:
+        print(f"[cache ohlcv] serialize error: {e}")
+
     return df
 
-# ── Info fondamentale ─────────────────────────────────────────
+# ── Info public ──────────────────────────────────────────────
 def get_info(symbol: str) -> dict:
     key = f"info:{symbol}"
     cached = _cache_get(key)
@@ -174,37 +190,29 @@ def get_info(symbol: str) -> dict:
 
     info = {}
 
-    # Tentative 1 : yfinance + curl_cffi
+    # 1. yfinance + curl_cffi
     try:
-        t = _ticker(symbol)
+        t    = _ticker(symbol)
         info = _retry(lambda: t.info)
-        if info and isinstance(info, dict) and info.get("regularMarketPrice"):
+        if info and isinstance(info, dict) and (
+            info.get("regularMarketPrice") or info.get("currentPrice")
+        ):
             print(f"[yfinance info] {symbol} OK")
             _cache_set(key, info, ttl=3600)
             return info
     except Exception as e:
         print(f"[yfinance info] {symbol} failed: {e}")
 
-    # Tentative 2 : construire un info minimal via Stooq
-    print(f"[fallback info] Construction info minimal pour {symbol}")
-    price = _get_price_stooq(symbol)
-    if price:
-        info = {
-            "symbol": symbol,
-            "regularMarketPrice": price,
-            "currentPrice": price,
-            "longName": symbol,
-            "shortName": symbol,
-            "currency": "USD",
-            "exchange": "Unknown",
-        }
+    # 2. Stooq fallback
+    info = _info_stooq(symbol)
+    if info:
         _cache_set(key, info, ttl=300)
         return info
 
     _cache_set(key, _FAILED, ttl=20)
     return {}
 
-# ── Prix temps réel ───────────────────────────────────────────
+# ── Prix public ───────────────────────────────────────────────
 def get_price(symbol: str) -> float | None:
     info = get_info(symbol)
     return info.get("regularMarketPrice") or info.get("currentPrice")
