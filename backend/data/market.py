@@ -56,7 +56,7 @@ def _fetch_stooq(symbol: str, period: str = "1y") -> pd.DataFrame:
     from datetime import date, timedelta
     periods = {"1y": 365, "2y": 730, "3y": 1095, "5y": 1825}
     days = periods.get(period, 365)
-    end = date.today()
+    end = date.today() - timedelta(days=1)
     start = end - timedelta(days=days)
     stooq_sym = _stooq_symbol(symbol)
     try:
@@ -120,3 +120,4 @@ def get_info(symbol: str) -> dict:
 def get_price(symbol: str) -> float | None:
     info = get_info(symbol)
     return info.get("regularMarketPrice") or info.get("currentPrice")
+
