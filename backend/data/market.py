@@ -47,6 +47,8 @@ def _stooq_symbol(symbol: str) -> str:
     for yf_suffix, stooq_suffix in mapping.items():
         if s.endswith(yf_suffix):
             return s.replace(yf_suffix, stooq_suffix)
+    if "." not in s:
+        s = s + ".US"
     return s
 
 def _fetch_stooq(symbol: str, period: str = "1y") -> pd.DataFrame:
