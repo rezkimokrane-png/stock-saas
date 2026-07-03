@@ -1,19 +1,19 @@
 import os
-from fastapi import FastAPI, Depends, HTTPException, Request, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
-from backend import models
-from backend.db import engine, get_db
-import backend.auth as auth
-import backend.stripe_payments as stripe_payments
-from backend.data.market import get_ohlcv, get_info, get_price
-from backend.engine.indicators import add_indicators, get_signals, serialize_ohlcv
-from backend.engine.scoring import compute_score, get_fundamentals_summary
-from backend.engine.forecasting import forecast_short, forecast_mid, forecast_long
+from . import models
+from .db import engine, get_db
+from . import auth
+from . import stripe_payments
+from .data.market import get_ohlcv, get_info, get_price
+from .engine.indicators import add_indicators, get_signals, serialize_ohlcv
+from .engine.scoring import compute_score, get_fundamentals_summary
+from .engine.forecasting import forecast_short, forecast_mid, forecast_long
 
 # ── Init DB ──────────────────────────────────────────────────
 models.Base.metadata.create_all(bind=engine)
@@ -45,17 +45,19 @@ async def root():
 # ════════════════════════════════════════════════════════════
 
 class RegisterBody(BaseModel):
-    email:     str
+    email:     EmailStr
     password:  str
     full_name: str = ""
 
 class LoginBody(BaseModel):
-    email:    str
+    email:    EmailStr
     password: str
 
 
 @app.post("/api/auth/register")
 def register(body: RegisterBody, db: Session = Depends(get_db)):
+    if len(body.password) < 8:
+        raise HTTPException(400, "Le mot de passe doit faire au moins 8 caractères")
     if db.query(models.User).filter(models.User.email == body.email).first():
         raise HTTPException(400, "Email déjà utilisé")
     user = models.User(
@@ -92,23 +94,25 @@ def me(user: models.User = Depends(auth.get_current_user)):
 
 @app.get("/api/analysis/{symbol}")
 def analysis(
-    symbol: str,
-    db:     Session = Depends(get_db),
-    user:   models.User = Depends(auth.get_current_user_optional),
+    symbol:  str,
+    request: Request,
+    db:      Session = Depends(get_db),
+    user:    models.User = Depends(auth.get_current_user_optional),
 ):
-    # Rate limiting pour les utilisateurs connectés
+    # Rate limiting : connectés (par plan) et anonymes (par IP).
+    # BUG CORRIGÉ : avant, un visiteur sans compte n'était jamais
+    # rate-limité (le check n'existait que dans le `if user:`), ce qui
+    # permettait un usage illimité gratuit et sans friction d'inscription.
     if user:
         auth.check_rate_limit(user, db)
+    else:
+        auth.check_anon_rate_limit(request)
 
     sym = symbol.upper()
     info = get_info(sym)
     price = info.get("regularMarketPrice") or info.get("currentPrice")
     if not price:
-        raise HTTPException(
-            503,
-            f"Impossible de récupérer les données pour {sym}. "
-            f"Soit le ticker est invalide, soit Yahoo Finance limite temporairement les requêtes — réessayez dans 10-20 secondes."
-        )
+        raise HTTPException(404, f"Ticker {sym} introuvable")
 
     df = get_ohlcv(sym)
     if df.empty:
@@ -125,9 +129,6 @@ def analysis(
     short_fc = forecast_short(sym, fundas["currency"])
     mid_fc   = forecast_mid(sym, fundas["currency"])  if plan in ("pro", "premium") else {}
     long_fc  = forecast_long(sym, fundas["currency"]) if plan == "premium"          else {}
-
-    if user:
-        auth.increment_usage(user, db)
 
     return {
         "symbol":       sym,
@@ -217,15 +218,15 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
 
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
-        user_id = int(session.get("client_reference_id", 0))
+        user_id = int(session.get("client_reference_id") or 0)
         sub_id  = session.get("subscription")
-        # Déterminer le plan par le price_id
-        line_items = session.get("display_items") or []
-        plan = "pro"  # Défaut — à affiner avec les price_id réels
+        # BUG CORRIGÉ : le plan était mis en dur à "pro" pour tout le
+        # monde. On le résout maintenant depuis les metadata / line items.
+        plan = stripe_payments.resolve_plan_from_session(session)
         user = db.query(models.User).filter(models.User.id == user_id).first()
         if user:
-            user.plan            = plan
-            user.stripe_sub_id   = sub_id
+            user.plan               = plan
+            user.stripe_sub_id      = sub_id
             user.stripe_customer_id = session.get("customer")
             db.commit()
 
@@ -246,6 +247,8 @@ def cancel_subscription(
     db:   Session = Depends(get_db),
     user: models.User = Depends(auth.get_current_user),
 ):
+    if not user.stripe_sub_id:
+        raise HTTPException(400, "Aucun abonnement actif")
     stripe_payments.cancel_subscription(user.stripe_sub_id)
     return {"ok": True, "message": "Abonnement annulé en fin de période"}
 

@@ -1,13 +1,8 @@
-import os, json, time
+import os, io, json
 import yfinance as yf
 import pandas as pd
 import warnings
 warnings.filterwarnings("ignore")
-
-# Note : yfinance >= 0.2.5x détecte automatiquement curl_cffi (installé via
-# requirements.txt) et l'utilise en interne pour contourner le blocage TLS
-# de Yahoo Finance sur les IP de datacenters cloud. Pas besoin de passer
-# de session manuellement.
 
 # ── Cache Redis optionnel (dégradé gracieusement si absent) ──
 try:
@@ -21,102 +16,93 @@ except Exception:
 
 CACHE_TTL = 300  # 5 minutes
 
-# ── Cache mémoire local (fallback si pas de Redis) ────────────
-# Réduit les appels répétés à Yahoo Finance pendant les tests/dev,
-# évite de se faire bloquer (429/"Too Many Requests").
-_mem_cache: dict = {}
+
+def _json_default(o):
+    """Convertit les types numpy/pandas non sérialisables en JSON natif."""
+    if hasattr(o, "item"):   # numpy scalar (int64, float64, bool_...)
+        return o.item()
+    return str(o)
 
 
-def _cache_get(key: str):
-    if REDIS_OK:
-        try:
-            v = _redis.get(key)
-            return json.loads(v) if v else None
-        except Exception:
-            pass
-    entry = _mem_cache.get(key)
-    if entry:
-        value, expires_at = entry
-        if time.time() < expires_at:
-            return value
-        del _mem_cache[key]
-    return None
+def cache_get_raw(key: str):
+    """Lit une chaîne brute dans le cache (pas de json.loads)."""
+    if not REDIS_OK:
+        return None
+    try:
+        return _redis.get(key)
+    except Exception:
+        return None
 
 
-def _cache_set(key: str, value, ttl=CACHE_TTL):
-    if REDIS_OK:
-        try:
-            _redis.setex(key, ttl, json.dumps(value))
-            return
-        except Exception:
-            pass
-    _mem_cache[key] = (value, time.time() + ttl)
+def cache_set_raw(key: str, value: str, ttl: int = CACHE_TTL):
+    if not REDIS_OK:
+        return
+    try:
+        _redis.setex(key, ttl, value)
+    except Exception:
+        pass
 
 
-def _retry(fn, attempts=3, delay=1.5):
-    """Réessaie en cas d'erreur transitoire (rate limit Yahoo, JSON cassé)."""
-    last_err = None
-    for i in range(attempts):
-        try:
-            return fn()
-        except Exception as e:
-            last_err = e
-            time.sleep(delay * (i + 1))
-    raise last_err
+def cache_get_json(key: str):
+    raw = cache_get_raw(key)
+    if raw is None:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
 
 
-_FAILED = "__FAILED__"
+def cache_set_json(key: str, value, ttl: int = CACHE_TTL):
+    try:
+        payload = json.dumps(value, default=_json_default)
+    except Exception:
+        return
+    cache_set_raw(key, payload, ttl)
 
 
 # ── Données OHLCV ────────────────────────────────────────────
+# BUG CORRIGÉ : l'ancienne version sérialisait le DataFrame via
+# `.to_dict()` puis `json.dumps()`. Les colonnes OHLCV contiennent des
+# types numpy (int64/float64) que `json.dumps` ne sait pas encoder ; ça
+# levait une exception à CHAQUE écriture, silencieusement avalée par le
+# try/except du cache. Résultat : le cache Redis pour l'historique de
+# prix ne fonctionnait jamais, et chaque analyse retapait yfinance.
+# On utilise maintenant `DataFrame.to_json()` / `pd.read_json()`, qui
+# gèrent nativement les types numpy et les dates.
 def get_ohlcv(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
     key = f"ohlcv:{symbol}:{period}:{interval}"
-    cached = _cache_get(key)
-    if cached == _FAILED:
-        return pd.DataFrame()
+    cached = cache_get_raw(key)
     if cached:
-        df = pd.DataFrame(cached)
-        df.index = pd.to_datetime(df.index)
+        try:
+            df = pd.read_json(io.StringIO(cached), orient="records", convert_dates=["Date"])
+            if not df.empty:
+                return df.set_index("Date")
+        except Exception:
+            pass
+
+    df = yf.Ticker(symbol).history(period=period, interval=interval)
+    if df.empty:
         return df
 
     try:
-        df = _retry(lambda: yf.Ticker(symbol).history(period=period, interval=interval))
-    except Exception as e:
-        print(f"[get_ohlcv] {symbol} failed: {e}")
-        _cache_set(key, _FAILED, ttl=20)  # évite de re-spammer Yahoo pendant 20s
-        return pd.DataFrame()
-
-    if df.empty:
-        _cache_set(key, _FAILED, ttl=20)
-        return df
-
-    _cache_set(key, df.reset_index().assign(
-        Date=lambda x: x["Date"].dt.strftime("%Y-%m-%d")
-    ).set_index("Date").to_dict(), ttl=120)
+        payload = df.reset_index().rename(columns={df.index.name or "index": "Date"}).to_json(
+            orient="records", date_format="iso"
+        )
+        cache_set_raw(key, payload, ttl=120)
+    except Exception:
+        pass
     return df
 
 
 # ── Infos fondamentales ───────────────────────────────────────
 def get_info(symbol: str) -> dict:
     key = f"info:{symbol}"
-    cached = _cache_get(key)
-    if cached == _FAILED:
-        return {}
-    if cached:
+    cached = cache_get_json(key)
+    if cached is not None:
         return cached
-
-    try:
-        info = _retry(lambda: yf.Ticker(symbol).info)
-    except Exception as e:
-        print(f"[get_info] {symbol} failed: {e}")
-        _cache_set(key, _FAILED, ttl=20)
-        return {}
-
-    if not info or not isinstance(info, dict):
-        _cache_set(key, _FAILED, ttl=20)
-        return {}
-
-    _cache_set(key, info, ttl=3600)
+    info = yf.Ticker(symbol).info or {}
+    cache_set_json(key, info, ttl=3600)
     return info
 
 

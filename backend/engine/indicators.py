@@ -47,55 +47,72 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 def get_signals(df: pd.DataFrame) -> dict:
     """Résumé des signaux techniques sur la dernière bougie."""
+    # BUG CORRIGÉ : sur un titre avec peu d'historique (<200 séances,
+    # ex. IPO récente), SMA200/RSI/etc. valent NaN et les comparaisons
+    # ("last['SMA20'] > last['SMA50']") plantent silencieusement en
+    # comparant des NaN (résultat toujours False, pas une erreur, mais
+    # ça donne des signaux trompeurs). On protège chaque bloc.
+    if len(df) < 2:
+        return {}
+
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
     signals = {}
 
+    def safe(*vals) -> bool:
+        return all(pd.notna(v) for v in vals)
+
     # Tendance MA
-    if last["SMA20"] > last["SMA50"] > last["SMA200"]:
-        signals["trend"] = {"value": "Haussière forte", "bullish": True}
-    elif last["SMA20"] < last["SMA50"]:
-        signals["trend"] = {"value": "Baissière", "bullish": False}
-    else:
-        signals["trend"] = {"value": "Neutre", "bullish": None}
+    if safe(last["SMA20"], last["SMA50"], last["SMA200"]):
+        if last["SMA20"] > last["SMA50"] > last["SMA200"]:
+            signals["trend"] = {"value": "Haussière forte", "bullish": True}
+        elif last["SMA20"] < last["SMA50"]:
+            signals["trend"] = {"value": "Baissière", "bullish": False}
+        else:
+            signals["trend"] = {"value": "Neutre", "bullish": None}
 
     # RSI
-    rsi = round(last["RSI"], 1)
-    if rsi > 70:
-        signals["rsi"] = {"value": f"{rsi} (suracheté)", "bullish": False}
-    elif rsi < 30:
-        signals["rsi"] = {"value": f"{rsi} (survendu)", "bullish": True}
-    else:
-        signals["rsi"] = {"value": str(rsi), "bullish": None}
+    if safe(last["RSI"]):
+        rsi = round(last["RSI"], 1)
+        if rsi > 70:
+            signals["rsi"] = {"value": f"{rsi} (suracheté)", "bullish": False}
+        elif rsi < 30:
+            signals["rsi"] = {"value": f"{rsi} (survendu)", "bullish": True}
+        else:
+            signals["rsi"] = {"value": str(rsi), "bullish": None}
 
     # MACD croisement
-    if last["MACD"] > last["MACD_signal"] and prev["MACD"] <= prev["MACD_signal"]:
-        signals["macd"] = {"value": "Croisement haussier", "bullish": True}
-    elif last["MACD"] < last["MACD_signal"] and prev["MACD"] >= prev["MACD_signal"]:
-        signals["macd"] = {"value": "Croisement baissier", "bullish": False}
-    else:
-        sign = "+" if last["MACD_hist"] > 0 else "-"
-        signals["macd"] = {"value": f"Histogramme {sign}", "bullish": bool(last["MACD_hist"] > 0)}
+    if safe(last["MACD"], last["MACD_signal"], prev["MACD"], prev["MACD_signal"]):
+        if last["MACD"] > last["MACD_signal"] and prev["MACD"] <= prev["MACD_signal"]:
+            signals["macd"] = {"value": "Croisement haussier", "bullish": True}
+        elif last["MACD"] < last["MACD_signal"] and prev["MACD"] >= prev["MACD_signal"]:
+            signals["macd"] = {"value": "Croisement baissier", "bullish": False}
+        else:
+            sign = "+" if last["MACD_hist"] > 0 else "-"
+            signals["macd"] = {"value": f"Histogramme {sign}", "bullish": last["MACD_hist"] > 0}
 
     # Bollinger
-    close = last["Close"]
-    if close > last["BB_upper"]:
-        signals["bollinger"] = {"value": "Au-dessus bande haute", "bullish": False}
-    elif close < last["BB_lower"]:
-        signals["bollinger"] = {"value": "En-dessous bande basse", "bullish": True}
-    else:
-        pct = round((close - last["BB_lower"]) / (last["BB_upper"] - last["BB_lower"]) * 100, 0)
-        signals["bollinger"] = {"value": f"Dans les bandes ({int(pct)}%)", "bullish": None}
+    if safe(last["Close"], last["BB_upper"], last["BB_lower"]):
+        close = last["Close"]
+        if close > last["BB_upper"]:
+            signals["bollinger"] = {"value": "Au-dessus bande haute", "bullish": False}
+        elif close < last["BB_lower"]:
+            signals["bollinger"] = {"value": "En-dessous bande basse", "bullish": True}
+        else:
+            span = last["BB_upper"] - last["BB_lower"]
+            pct = round((close - last["BB_lower"]) / span * 100, 0) if span else 50
+            signals["bollinger"] = {"value": f"Dans les bandes ({int(pct)}%)", "bullish": None}
 
     # Stochastique
-    k = round(last["Stoch_K"], 1)
-    if k > 80:
-        signals["stochastic"] = {"value": f"{k} (suracheté)", "bullish": False}
-    elif k < 20:
-        signals["stochastic"] = {"value": f"{k} (survendu)", "bullish": True}
-    else:
-        signals["stochastic"] = {"value": str(k), "bullish": None}
+    if safe(last["Stoch_K"]):
+        k = round(last["Stoch_K"], 1)
+        if k > 80:
+            signals["stochastic"] = {"value": f"{k} (suracheté)", "bullish": False}
+        elif k < 20:
+            signals["stochastic"] = {"value": f"{k} (survendu)", "bullish": True}
+        else:
+            signals["stochastic"] = {"value": str(k), "bullish": None}
 
     return signals
 

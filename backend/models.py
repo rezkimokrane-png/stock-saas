@@ -1,6 +1,6 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime
 from sqlalchemy.sql import func
-from backend.db import Base
+from .db import Base
 
 
 class User(Base):
@@ -12,7 +12,7 @@ class User(Base):
     full_name     = Column(String, default="")
     plan          = Column(String, default="free")          # free | pro | premium
     stripe_customer_id = Column(String, nullable=True)
-    stripe_sub_id      = Column(String, nullable=True)
+    stripe_sub_id      = Column(String, nullable=True, index=True)
     analyses_today     = Column(Integer, default=0)
     analyses_date      = Column(String, default="")         # YYYY-MM-DD
     is_active     = Column(Boolean, default=True)
