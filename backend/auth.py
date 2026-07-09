@@ -5,8 +5,8 @@ from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from backend.db import get_db
-from backend import models
+from .db import get_db
+from . import models
 
 SECRET_KEY   = os.getenv("SECRET_KEY", "change-me-in-production-please")
 ALGORITHM    = "HS256"
@@ -18,17 +18,19 @@ bearer   = HTTPBearer(auto_error=False)
 
 # ── Passwords ────────────────────────────────────────────────
 def hash_password(plain: str) -> str:
-    return pwd_ctx.hash(plain)
+    # bcrypt tronque silencieusement au-delà de 72 octets : on le fait
+    # explicitement pour éviter une troncature UTF-8 incohérente.
+    return pwd_ctx.hash(plain[:72])
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_ctx.verify(plain, hashed)
+    return pwd_ctx.verify(plain[:72], hashed)
 
 
 # ── Tokens ───────────────────────────────────────────────────
 def create_token(user_id: int) -> str:
     payload = {
         "sub": str(user_id),
-        "exp": datetime.datetime.utcnow() + datetime.timedelta(days=TOKEN_EXPIRE),
+        "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=TOKEN_EXPIRE),
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -66,25 +68,45 @@ def get_current_user_optional(
         return None
 
 
-# ── Rate limiting par plan ────────────────────────────────────
-PLAN_LIMITS = {"free": 20, "pro": 100, "premium": 999}
+# ── Rate limiting par plan (utilisateurs connectés) ───────────
+PLAN_LIMITS = {"free": 3, "pro": 50, "premium": 999}
 
 def check_rate_limit(user: models.User, db: Session):
-    """Vérifie le quota sans l'incrémenter (incrémentation après succès)."""
     from datetime import date
     today = str(date.today())
     if user.analyses_date != today:
         user.analyses_date  = today
         user.analyses_today = 0
-        db.commit()
     limit = PLAN_LIMITS.get(user.plan, 3)
     if user.analyses_today >= limit:
         raise HTTPException(
             status_code=429,
             detail=f"Limite atteinte ({limit}/jour sur le plan {user.plan}). Upgradez pour continuer."
         )
-
-def increment_usage(user: models.User, db: Session):
-    """À appeler uniquement après une analyse réussie."""
     user.analyses_today += 1
     db.commit()
+
+
+# ── Rate limiting par IP (visiteurs non connectés) ────────────
+# Avant : les requêtes sans token contournaient totalement le rate limit
+# (get_current_user_optional renvoie None => check_rate_limit jamais appelé).
+# N'importe qui pouvait donc spammer /api/analysis sans compte, ce qui
+# tue à la fois le modèle freemium et la performance (chaque appel
+# déclenche un fetch yfinance + un fit ARIMA).
+ANON_DAILY_LIMIT = 1
+_anon_usage: dict[str, dict] = {}
+
+def check_anon_rate_limit(request):
+    from datetime import date
+    ip = request.client.host if request.client else "unknown"
+    today = str(date.today())
+    rec = _anon_usage.get(ip)
+    if not rec or rec["date"] != today:
+        rec = {"date": today, "count": 0}
+    if rec["count"] >= ANON_DAILY_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail="Limite atteinte pour les visiteurs (1/jour). Créez un compte gratuit pour continuer."
+        )
+    rec["count"] += 1
+    _anon_usage[ip] = rec

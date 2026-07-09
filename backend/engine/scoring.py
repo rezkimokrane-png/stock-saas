@@ -54,9 +54,7 @@ def compute_score(df: pd.DataFrame, info: dict, signals: dict) -> dict:
     scores["momentum"] = round(min(m, 20.0), 1)
 
     # ── 5. Dividendes (20 pts) ───────────────────────────────
-    # Yahoo retourne désormais dividendYield directement en % (ex: 0.93 = 0.93%),
-    # et non plus comme une fraction (ex: 0.0093). Pas de *100 ici.
-    dy = info.get("dividendYield") or 0
+    dy = (info.get("dividendYield")  or 0) * 100
     pr = info.get("payoutRatio") or 1
 
     d = 0.0
@@ -119,7 +117,7 @@ def get_fundamentals_summary(info: dict) -> dict:
         "eps_growth":     pct(info.get("earningsGrowth")),
         "debt_eq":        val(info.get("debtToEquity")),
         "current_ratio":  val(info.get("currentRatio")),
-        "div_yield":      f"{round(info.get('dividendYield') or 0, 2)}%",
+        "div_yield":      pct(info.get("dividendYield")),
         "payout":         pct(info.get("payoutRatio")),
         "52w_high":       val(info.get("fiftyTwoWeekHigh")),
         "52w_low":        val(info.get("fiftyTwoWeekLow")),
