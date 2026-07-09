@@ -73,7 +73,15 @@ def get_ohlcv(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataF
         except Exception:
             pass
 
-    df = yf.Ticker(symbol).history(period=period, interval=interval)
+    # NOUVEAU : timeout réseau défensif. Sans lui, un appel yfinance
+    # bloqué (Yahoo Finance lent/rate-limité) peut immobiliser le thread
+    # qui l'exécute indéfiniment. `timeout` est supporté par les
+    # versions récentes de yfinance ; on retombe sur l'appel sans
+    # timeout si la version installée ne le supporte pas.
+    try:
+        df = yf.Ticker(symbol).history(period=period, interval=interval, timeout=10)
+    except TypeError:
+        df = yf.Ticker(symbol).history(period=period, interval=interval)
     if df.empty:
         return df
 
@@ -176,7 +184,16 @@ def get_market_overview(tickers: dict, fundamentals_for: set[str] | None = None)
     (clés de `tickers`) pour lesquels on enrichit aussi avec des champs
     fondamentaux (secteur, PE, dividende...), utilisés pour le filtrage
     thématique côté frontend. Retourne un quote léger par instrument,
-    avec cache PARTAGÉ (mémoire + Redis) de 5 minutes."""
+    avec cache PARTAGÉ (mémoire + Redis) de 5 minutes.
+
+    NOUVEAU : les ~28 tickers sont interrogés EN PARALLÈLE (thread pool)
+    avec un délai maximum strict par ticker (TICKER_TIMEOUT). Avant ce
+    correctif, les appels étaient séquentiels : un seul ticker lent ou
+    bloqué par Yahoo Finance (cf. le problème de rate-limiting déjà
+    rencontré sur ce projet) pouvait faire dépasser le délai global du
+    serveur et provoquer une Internal Server Error sur TOUT l'endpoint.
+    Désormais, un ticker qui traîne est simplement ignoré (résultat
+    partiel) au lieu de bloquer les autres."""
     fundamentals_for = fundamentals_for or set()
     now = _time.time()
     if _overview_cache["data"] is not None and now - _overview_cache["ts"] < OVERVIEW_TTL:
@@ -187,14 +204,36 @@ def get_market_overview(tickers: dict, fundamentals_for: set[str] | None = None)
         _overview_cache["data"], _overview_cache["ts"] = cached, now
         return cached
 
+    import concurrent.futures
+    TICKER_TIMEOUT = 8      # secondes max par ticker
+    MAX_WORKERS    = 10     # requêtes en parallèle
+
     result = {}
-    for name, sym in tickers.items():
-        try:
-            q = get_quick_quote(sym, with_fundamentals=(name in fundamentals_for))
-            if q:
-                result[name] = q
-        except Exception:
-            continue
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS)
+    futures = {
+        pool.submit(get_quick_quote, sym, name in fundamentals_for): name
+        for name, sym in tickers.items()
+    }
+    try:
+        for fut in concurrent.futures.as_completed(futures, timeout=TICKER_TIMEOUT * 3):
+            name = futures[fut]
+            try:
+                q = fut.result()
+                if q:
+                    result[name] = q
+            except Exception:
+                continue
+    except concurrent.futures.TimeoutError:
+        # Certains tickers n'ont pas répondu à temps : on garde les
+        # résultats déjà obtenus plutôt que de faire échouer tout
+        # l'endpoint.
+        pass
+    finally:
+        # wait=False : ne bloque PAS sur les threads encore en cours
+        # (un socket bloqué ne peut pas être tué de force en Python).
+        # Ils se termineront seuls en arrière-plan sans impacter la
+        # réponse déjà renvoyée à l'utilisateur.
+        pool.shutdown(wait=False, cancel_futures=True)
 
     cache_set_json("market_overview:v2", result, ttl=OVERVIEW_TTL)
     _overview_cache["data"], _overview_cache["ts"] = result, now
