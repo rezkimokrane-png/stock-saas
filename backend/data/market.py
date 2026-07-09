@@ -122,7 +122,7 @@ _overview_cache = {"data": None, "ts": 0.0}
 OVERVIEW_TTL = 300  # 5 minutes, partagé entre tous les visiteurs
 
 
-def get_quick_quote(symbol: str) -> dict | None:
+def get_quick_quote(symbol: str, with_fundamentals: bool = False) -> dict | None:
     df = get_ohlcv(symbol, period="3mo", interval="1d")
     if df.empty or len(df) < 15:
         return None
@@ -140,7 +140,7 @@ def get_quick_quote(symbol: str) -> dict | None:
     bear = sum(1 for s in signals.values() if s.get("bullish") is False)
     sig = "buy" if bull > bear else ("sell" if bear > bull else "hold")
     points = [round(float(v), 4) for v in df["Close"].tail(11).tolist()]
-    return {
+    result = {
         "price":       round(price, 4),
         "change_pct":  round(change_pct, 2),
         "rsi":         rsi,
@@ -148,15 +148,41 @@ def get_quick_quote(symbol: str) -> dict | None:
         "points":      points,
     }
 
+    # NOUVEAU : champs fondamentaux légers, utilisés pour le filtrage
+    # thématique réel (page "Idées d'investissement") côté frontend.
+    # Volontairement optionnel (with_fundamentals) : on ne l'active que
+    # pour les actions (pas les indices/commodités) dans l'aperçu marché.
+    if with_fundamentals:
+        try:
+            info = get_info(symbol)
+            result["sector"]       = info.get("sector")
+            result["industry"]     = info.get("industry")
+            result["pe"]           = info.get("trailingPE")
+            result["peg"]          = info.get("pegRatio")
+            result["div_yield"]    = round((info.get("dividendYield") or 0) * 100, 2)
+            result["roe"]          = round((info.get("returnOnEquity") or 0) * 100, 2)
+            result["rev_growth"]   = round((info.get("revenueGrowth") or 0) * 100, 2)
+            result["debt_eq"]      = info.get("debtToEquity")
+            result["market_cap"]   = info.get("marketCap")
+            result["payout_ratio"] = info.get("payoutRatio")
+        except Exception:
+            pass
 
-def get_market_overview(tickers: dict) -> dict:
-    """tickers: {nom_affiché: symbole_yfinance}. Retourne un quote léger
-    par instrument, avec cache PARTAGÉ (mémoire + Redis) de 5 minutes."""
+    return result
+
+
+def get_market_overview(tickers: dict, fundamentals_for: set[str] | None = None) -> dict:
+    """tickers: {nom_affiché: symbole_yfinance}. fundamentals_for: noms
+    (clés de `tickers`) pour lesquels on enrichit aussi avec des champs
+    fondamentaux (secteur, PE, dividende...), utilisés pour le filtrage
+    thématique côté frontend. Retourne un quote léger par instrument,
+    avec cache PARTAGÉ (mémoire + Redis) de 5 minutes."""
+    fundamentals_for = fundamentals_for or set()
     now = _time.time()
     if _overview_cache["data"] is not None and now - _overview_cache["ts"] < OVERVIEW_TTL:
         return _overview_cache["data"]
 
-    cached = cache_get_json("market_overview:v1")
+    cached = cache_get_json("market_overview:v2")
     if cached is not None:
         _overview_cache["data"], _overview_cache["ts"] = cached, now
         return cached
@@ -164,13 +190,13 @@ def get_market_overview(tickers: dict) -> dict:
     result = {}
     for name, sym in tickers.items():
         try:
-            q = get_quick_quote(sym)
+            q = get_quick_quote(sym, with_fundamentals=(name in fundamentals_for))
             if q:
                 result[name] = q
         except Exception:
             continue
 
-    cache_set_json("market_overview:v1", result, ttl=OVERVIEW_TTL)
+    cache_set_json("market_overview:v2", result, ttl=OVERVIEW_TTL)
     _overview_cache["data"], _overview_cache["ts"] = result, now
     return result
 

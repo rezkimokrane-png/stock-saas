@@ -61,9 +61,15 @@ MARKET_TICKERS = {
     "Nestlé": "NESN.SW", "Samsung": "005930.KS",
 }
 
+STOCK_NAMES = {
+    "LVMH", "TotalEnergies", "Sanofi", "BNP Paribas", "Airbus",
+    "Apple", "Microsoft", "Tesla", "Nvidia", "Amazon", "Meta",
+    "Nestlé", "Samsung",
+}
+
 @app.get("/api/market-overview")
 def market_overview():
-    return get_market_overview(MARKET_TICKERS)
+    return get_market_overview(MARKET_TICKERS, fundamentals_for=STOCK_NAMES)
 
 
 # ════════════════════════════════════════════════════════════
