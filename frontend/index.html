@@ -818,6 +818,7 @@ const LANGS = {
 };
 
 let currentLang = 'en';
+let activeTheme = null;
 
 function setLang(lang) {
   currentLang = lang;
@@ -1562,8 +1563,6 @@ const THEMES = [
   {icon:'💎', key:'smallcap', title:{en:'Smaller Caps (in this list)',fr:'Plus petites capis (de la liste)',es:'Capis más pequeñas (de la lista)',ar:'رساميل أصغر (من القائمة)',zh:'较小市值(本列表内)'}, desc:{en:'Market cap under $150B.',fr:'Capitalisation inférieure à 150 Md$.',es:'Capitalización inferior a 150 Md$.',ar:'قيمة سوقية أقل من 150 مليار دولار.',zh:'市值低于1500亿美元。'}, match:s=>s.f_cap!=null && s.f_cap<150e9},
   {icon:'📊', key:'garp', title:{en:'GARP Investing',fr:'Investissement GARP',es:'Inversión GARP',ar:'استثمار GARP',zh:'GARP投资'}, desc:{en:'PEG < 1.5 with revenue growth > 15%.',fr:'PEG < 1,5 avec croissance CA > 15 %.',es:'PEG < 1,5 con crecimiento > 15%.',ar:'PEG < 1.5 مع نمو إيرادات > 15%.',zh:'PEG<1.5且收入增长>15%。'}, match:s=>s.f_peg!=null && s.f_peg>0 && s.f_peg<1.5 && s.f_revg!=null && s.f_revg>15}
 ];
-
-let activeTheme = null;
 
 function renderIdeas() {
   const lang = currentLang;
