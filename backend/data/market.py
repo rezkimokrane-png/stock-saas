@@ -15,6 +15,11 @@ warnings.filterwarnings("ignore")
 FMP_API_KEY = os.getenv("FMP_API_KEY", "")
 FMP_BASE    = "https://financialmodelingprep.com/api/v3"
 
+if not FMP_API_KEY:
+    print("[market.py] ATTENTION : FMP_API_KEY est vide — toutes les données de marché seront indisponibles.")
+else:
+    print(f"[market.py] FMP_API_KEY détectée (se termine par ...{FMP_API_KEY[-4:]})")
+
 
 def _fmp_get(path: str, params: dict | None = None, timeout: int = 10):
     """Appel générique à l'API FMP. Retourne None (jamais d'exception)
@@ -27,6 +32,7 @@ def _fmp_get(path: str, params: dict | None = None, timeout: int = 10):
     try:
         r = requests.get(f"{FMP_BASE}/{path}", params=p, timeout=timeout)
         if r.status_code != 200:
+            print(f"[market.py] FMP {path} -> HTTP {r.status_code}: {r.text[:200]}")
             return None
         return r.json()
     except Exception:
@@ -313,8 +319,14 @@ def get_market_overview(tickers: dict, fundamentals_for: set[str] | None = None)
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
 
-    cache_set_json("market_overview:v3", result, ttl=OVERVIEW_TTL)
-    _overview_cache["data"], _overview_cache["ts"] = result, now
+    # NOUVEAU : on ne met en cache (mémoire + Redis) QUE si on a obtenu
+    # au moins un résultat. Un échec total (ex : clé FMP pas encore
+    # propagée, FMP temporairement indisponible) ne doit jamais rester
+    # figé pendant tout OVERVIEW_TTL — on préfère réessayer à la
+    # prochaine requête.
+    if result:
+        cache_set_json("market_overview:v3", result, ttl=OVERVIEW_TTL)
+        _overview_cache["data"], _overview_cache["ts"] = result, now
     return result
 
 
