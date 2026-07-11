@@ -252,7 +252,7 @@ _overview_cache = {"data": None, "ts": 0.0}
 # ceci laisse une marge pour les clics individuels sur des actions
 # (/api/analysis, /api/financials). Ajustez cette valeur à la baisse
 # une fois passé sur un plan FMP payant.
-OVERVIEW_TTL = 3600
+OVERVIEW_TTL = 7200
 
 
 def get_quick_quote(symbol: str, with_fundamentals: bool = False) -> dict | None:
