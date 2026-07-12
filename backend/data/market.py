@@ -1,48 +1,8 @@
-import os, io, json, time as _time
-import requests
+import os, io, json
+import yfinance as yf
 import pandas as pd
 import warnings
 warnings.filterwarnings("ignore")
-
-# ═══════════════════════════════════════════════════════════════
-#  SOURCE DE DONNÉES : Financial Modeling Prep (remplace Yahoo
-#  Finance / yfinance). Yahoo Finance bloquait/throttlait
-#  systématiquement les IP partagées de Render (confirmé : endpoint
-#  /api/market-overview renvoyait {} après un timeout complet sur
-#  TOUS les tickers). FMP est une vraie API avec clé, sans ce
-#  problème de blocage IP.
-# ═══════════════════════════════════════════════════════════════
-FMP_API_KEY = os.getenv("FMP_API_KEY", "")
-# NOUVEAU : FMP a migré son API vers une nouvelle structure "/stable/"
-# où le symbole passe en paramètre de requête (?symbol=AAPL) et non
-# plus dans le chemin de l'URL. L'ancienne route /api/v3/... est
-# dépréciée ("Legacy Endpoint") pour toute clé créée après août 2025 —
-# confirmé par les logs Render (HTTP 403 sur tous les tickers).
-FMP_BASE = "https://financialmodelingprep.com/stable"
-
-if not FMP_API_KEY:
-    print("[market.py] ATTENTION : FMP_API_KEY est vide — toutes les données de marché seront indisponibles.")
-else:
-    print(f"[market.py] FMP_API_KEY détectée (se termine par ...{FMP_API_KEY[-4:]})")
-
-
-def _fmp_get(path: str, params: dict | None = None, timeout: int = 10):
-    """Appel générique à l'API FMP. Retourne None (jamais d'exception)
-    si la clé est absente, le réseau échoue, ou la réponse n'est pas
-    du JSON exploitable — chaque appelant gère le cas None."""
-    if not FMP_API_KEY:
-        return None
-    p = dict(params or {})
-    p["apikey"] = FMP_API_KEY
-    try:
-        r = requests.get(f"{FMP_BASE}/{path}", params=p, timeout=timeout)
-        if r.status_code != 200:
-            print(f"[market.py] FMP {path} -> HTTP {r.status_code}: {r.text[:200]}")
-            return None
-        return r.json()
-    except Exception:
-        return None
-
 
 # ── Cache Redis optionnel (dégradé gracieusement si absent) ──
 try:
@@ -65,6 +25,7 @@ def _json_default(o):
 
 
 def cache_get_raw(key: str):
+    """Lit une chaîne brute dans le cache (pas de json.loads)."""
     if not REDIS_OK:
         return None
     try:
@@ -100,9 +61,7 @@ def cache_set_json(key: str, value, ttl: int = CACHE_TTL):
     cache_set_raw(key, payload, ttl)
 
 
-# ── Données OHLCV (historique quotidien, agrégé en hebdo si besoin) ──
-_PERIOD_DAYS = {"3mo": 95, "1y": 380, "3y": 1130, "5y": 1900}
-
+# ── Données OHLCV ────────────────────────────────────────────
 def get_ohlcv(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
     key = f"ohlcv:{symbol}:{period}:{interval}"
     cached = cache_get_raw(key)
@@ -114,37 +73,7 @@ def get_ohlcv(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataF
         except Exception:
             pass
 
-    import datetime
-    days  = _PERIOD_DAYS.get(period, 380)
-    end   = datetime.date.today()
-    start = end - datetime.timedelta(days=days)
-    data = _fmp_get("historical-price-eod/full", {
-        "symbol": symbol,
-        "from":   start.isoformat(),
-        "to":     end.isoformat(),
-    })
-    # La nouvelle API "stable" renvoie une liste JSON directement (plus
-    # de wrapper {"historical": [...]} comme l'ancienne /api/v3/).
-    if isinstance(data, list):
-        hist = data
-    elif isinstance(data, dict):
-        hist = data.get("historical")
-    else:
-        hist = None
-    if not hist:
-        return pd.DataFrame()
-
-    df = pd.DataFrame(hist)
-    df["Date"] = pd.to_datetime(df["date"])
-    df = df.rename(columns={"open": "Open", "high": "High", "low": "Low",
-                             "close": "Close", "volume": "Volume"})
-    df = df[["Date", "Open", "High", "Low", "Close", "Volume"]].sort_values("Date")
-    df = df.set_index("Date")
-
-    if interval == "1wk":
-        df = df.resample("W").agg({"Open": "first", "High": "max", "Low": "min",
-                                    "Close": "last", "Volume": "sum"}).dropna()
-
+    df = yf.Ticker(symbol).history(period=period, interval=interval)
     if df.empty:
         return df
 
@@ -152,110 +81,48 @@ def get_ohlcv(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataF
         payload = df.reset_index().rename(columns={df.index.name or "index": "Date"}).to_json(
             orient="records", date_format="iso"
         )
-        cache_set_raw(key, payload, ttl=900)
+        cache_set_raw(key, payload, ttl=120)
     except Exception:
         pass
     return df
 
 
-# ── Infos fondamentales (assemble un dict au format proche de
-#    l'ancien yfinance `.info`, pour ne rien casser dans scoring.py) ──
-# NOUVEAU : cache mémoire de secours (fonctionne même si Redis n'est
-# pas provisionné sur Render — c'est le cas par défaut si aucune
-# instance Redis n'a été ajoutée). Sans lui, chaque appel refait 3
-# requêtes FMP à chaque fois, ce qui épuise très vite le quota gratuit
-# de 250 requêtes/jour.
-_info_cache: dict[str, tuple[float, dict]] = {}
-INFO_TTL = 6 * 3600  # 6h : les fondamentaux changent lentement (trimestriel)
-
+# ── Infos fondamentales ───────────────────────────────────────
 def get_info(symbol: str) -> dict:
-    now = _time.time()
-    mem = _info_cache.get(symbol)
-    if mem and now - mem[0] < INFO_TTL:
-        return mem[1]
-
     key = f"info:{symbol}"
     cached = cache_get_json(key)
     if cached is not None:
-        _info_cache[symbol] = (now, cached)
         return cached
-
-    # 3 appels au lieu de 4 : on se passe de financial-growth (revenue/
-    # earnings growth) pour économiser le quota — dégradation
-    # acceptable, ces champs retombent sur None/0 partout où ils sont
-    # utilisés (scoring, filtrage thématique).
-    profile = _fmp_get("profile", {"symbol": symbol})
-    quote   = _fmp_get("quote", {"symbol": symbol})
-    ratios  = _fmp_get("ratios-ttm", {"symbol": symbol})
-
-    p = (profile or [{}])[0] if isinstance(profile, list) and profile else {}
-    q = (quote or [{}])[0] if isinstance(quote, list) and quote else {}
-    r = (ratios or [{}])[0] if isinstance(ratios, list) and ratios else {}
-
-    info = {
-        "regularMarketPrice":   q.get("price"),
-        "currentPrice":         q.get("price"),
-        "currency":             p.get("currency", "USD"),
-        "longName":             p.get("companyName"),
-        "sector":               p.get("sector"),
-        "industry":             p.get("industry"),
-        "exchange":             p.get("exchangeShortName"),
-        "longBusinessSummary":  p.get("description", ""),
-        "marketCap":            q.get("marketCap") or p.get("mktCap"),
-        "trailingPE":           q.get("pe") or r.get("peRatioTTM"),
-        "forwardPE":            None,
-        "priceToBook":          r.get("priceToBookRatioTTM"),
-        "pegRatio":             r.get("priceEarningsToGrowthRatioTTM"),
-        "enterpriseToEbitda":   r.get("enterpriseValueMultipleTTM"),
-        "returnOnEquity":       r.get("returnOnEquityTTM"),
-        "returnOnAssets":       r.get("returnOnAssetsTTM"),
-        "profitMargins":        r.get("netProfitMarginTTM"),
-        "grossMargins":         r.get("grossProfitMarginTTM"),
-        "revenueGrowth":        None,
-        "earningsGrowth":       None,
-        "debtToEquity":         r.get("debtEquityRatioTTM"),
-        "currentRatio":         r.get("currentRatioTTM"),
-        "quickRatio":           r.get("quickRatioTTM"),
-        "freeCashflow":         None,
-        "dividendYield":        r.get("dividendYielTTM") or r.get("dividendYieldTTM"),
-        "payoutRatio":          r.get("payoutRatioTTM"),
-        "fiftyTwoWeekHigh":     q.get("yearHigh"),
-        "fiftyTwoWeekLow":      q.get("yearLow"),
-        "targetMeanPrice":      None,
-        "numberOfAnalystOpinions": None,
-        "recommendationKey":   "-",
-        "buybackYield":        None,
-    }
-    # Ne met en cache que si on a au moins un prix (évite de figer un
-    # échec temporaire pendant toute la durée du TTL).
-    if info.get("regularMarketPrice") is not None:
-        cache_set_json(key, info, ttl=INFO_TTL)
-        _info_cache[symbol] = (now, info)
+    info = yf.Ticker(symbol).info or {}
+    cache_set_json(key, info, ttl=3600)
     return info
 
 
+# ── Prix temps réel ───────────────────────────────────────────
 def get_price(symbol: str) -> float | None:
     info = get_info(symbol)
     return info.get("regularMarketPrice") or info.get("currentPrice")
 
 
 # ── Aperçu marché léger (page d'accueil) ──────────────────────
+# NOUVEAU : endpoint public utilisé pour peupler les grilles
+# indices/actions de la page d'accueil. Volontairement séparé de
+# /api/analysis (qui reste rate-limité par utilisateur/IP et fait un
+# vrai fit ARIMA). Ici on ne calcule qu'un quote léger (prix, variation,
+# RSI, signal), et surtout on le fait AU PLUS UNE FOIS TOUTES LES 5 MIN
+# pour TOUS les visiteurs confondus (cache mémoire + Redis), pas par
+# visiteur. Sans ce découplage, chaque chargement de page déclencherait
+# ~25 appels yfinance par visiteur, ce qui recréerait exactement le
+# problème de rate-limiting Yahoo Finance / IP partagée Render déjà
+# rencontré sur ce projet.
 from ..engine.indicators import add_indicators, get_signals as _get_signals
+import time as _time
 
 _overview_cache = {"data": None, "ts": 0.0}
-# NOUVEAU : 30 minutes (au lieu de 5) — le tier gratuit FMP a un quota
-# journalier limité ; avec ~28 tickers par rafraîchissement, ceci reste
-# largement dans le budget tout en respectant la mention "délai 15-20
-# min" déjà affichée dans l'interface.
-# NOUVEAU : 1 heure — avec ~28 tickers suivis, chaque rafraîchissement
-# consomme ~28 requêtes FMP. Sur le tier gratuit (250 requêtes/jour),
-# ceci laisse une marge pour les clics individuels sur des actions
-# (/api/analysis, /api/financials). Ajustez cette valeur à la baisse
-# une fois passé sur un plan FMP payant.
-OVERVIEW_TTL = 7200
+OVERVIEW_TTL = 300  # 5 minutes, partagé entre tous les visiteurs
 
 
-def get_quick_quote(symbol: str, with_fundamentals: bool = False) -> dict | None:
+def get_quick_quote(symbol: str) -> dict | None:
     df = get_ohlcv(symbol, period="3mo", interval="1d")
     if df.empty or len(df) < 15:
         return None
@@ -273,7 +140,7 @@ def get_quick_quote(symbol: str, with_fundamentals: bool = False) -> dict | None
     bear = sum(1 for s in signals.values() if s.get("bullish") is False)
     sig = "buy" if bull > bear else ("sell" if bear > bull else "hold")
     points = [round(float(v), 4) for v in df["Close"].tail(11).tolist()]
-    result = {
+    return {
         "price":       round(price, 4),
         "change_pct":  round(change_pct, 2),
         "rsi":         rsi,
@@ -281,127 +148,91 @@ def get_quick_quote(symbol: str, with_fundamentals: bool = False) -> dict | None
         "points":      points,
     }
 
-    if with_fundamentals:
-        try:
-            info = get_info(symbol)
-            result["sector"]       = info.get("sector")
-            result["industry"]     = info.get("industry")
-            result["pe"]           = info.get("trailingPE")
-            result["peg"]          = info.get("pegRatio")
-            result["div_yield"]    = round((info.get("dividendYield") or 0) * 100, 2)
-            result["roe"]          = round((info.get("returnOnEquity") or 0) * 100, 2)
-            result["rev_growth"]   = round((info.get("revenueGrowth") or 0) * 100, 2)
-            result["debt_eq"]      = info.get("debtToEquity")
-            result["market_cap"]   = info.get("marketCap")
-            result["payout_ratio"] = info.get("payoutRatio")
-        except Exception:
-            pass
 
-    return result
-
-
-def get_market_overview(tickers: dict, fundamentals_for: set[str] | None = None) -> dict:
-    """tickers: {nom_affiché: symbole}. Cache PARTAGÉ (mémoire + Redis),
-    tickers interrogés EN PARALLÈLE avec timeout strict par ticker,
-    pour ne jamais bloquer tout l'endpoint sur un seul appel lent."""
-    fundamentals_for = fundamentals_for or set()
+def get_market_overview(tickers: dict) -> dict:
+    """tickers: {nom_affiché: symbole_yfinance}. Retourne un quote léger
+    par instrument, avec cache PARTAGÉ (mémoire + Redis) de 5 minutes."""
     now = _time.time()
     if _overview_cache["data"] is not None and now - _overview_cache["ts"] < OVERVIEW_TTL:
         return _overview_cache["data"]
 
-    cached = cache_get_json("market_overview:v3")
+    cached = cache_get_json("market_overview:v1")
     if cached is not None:
         _overview_cache["data"], _overview_cache["ts"] = cached, now
         return cached
 
-    import concurrent.futures
-    TICKER_TIMEOUT = 8
-    MAX_WORKERS    = 10
-
     result = {}
-    pool = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS)
-    futures = {
-        pool.submit(get_quick_quote, sym, name in fundamentals_for): name
-        for name, sym in tickers.items()
-    }
-    try:
-        for fut in concurrent.futures.as_completed(futures, timeout=TICKER_TIMEOUT * 3):
-            name = futures[fut]
-            try:
-                q = fut.result()
-                if q:
-                    result[name] = q
-            except Exception:
-                continue
-    except concurrent.futures.TimeoutError:
-        pass
-    finally:
-        pool.shutdown(wait=False, cancel_futures=True)
+    for name, sym in tickers.items():
+        try:
+            q = get_quick_quote(sym)
+            if q:
+                result[name] = q
+        except Exception:
+            continue
 
-    # NOUVEAU : on ne met en cache (mémoire + Redis) QUE si on a obtenu
-    # au moins un résultat. Un échec total (ex : clé FMP pas encore
-    # propagée, FMP temporairement indisponible) ne doit jamais rester
-    # figé pendant tout OVERVIEW_TTL — on préfère réessayer à la
-    # prochaine requête.
-    if result:
-        cache_set_json("market_overview:v3", result, ttl=OVERVIEW_TTL)
-        _overview_cache["data"], _overview_cache["ts"] = result, now
+    cache_set_json("market_overview:v1", result, ttl=OVERVIEW_TTL)
+    _overview_cache["data"], _overview_cache["ts"] = result, now
     return result
 
 
 # ── États financiers complets : bilan, résultats, trésorerie ──
-BALANCE_MAP = {
-    "Total Assets":                            "totalAssets",
-    "Current Assets":                          "totalCurrentAssets",
-    "Cash And Cash Equivalents":               "cashAndCashEquivalents",
-    "Total Liabilities Net Minority Interest": "totalLiabilities",
-    "Current Liabilities":                     "totalCurrentLiabilities",
-    "Total Debt":                              "totalDebt",
-    "Total Equity Gross Minority Interest":    "totalStockholdersEquity",
-}
-INCOME_MAP = {
-    "Total Revenue":    "revenue",
-    "Gross Profit":     "grossProfit",
-    "Operating Income": "operatingIncome",
-    "EBITDA":           "ebitda",
-    "Net Income":        "netIncome",
-    "Diluted EPS":       "epsdiluted",
-}
-CASHFLOW_MAP = {
-    "Operating Cash Flow": "operatingCashFlow",
-    "Investing Cash Flow": "netCashUsedForInvestingActivites",
-    "Financing Cash Flow": "netCashUsedProvidedByFinancingActivities",
-    "Capital Expenditure": "capitalExpenditure",
-    "Free Cash Flow":      "freeCashFlow",
-}
+# NOUVEAU : expose le détail annuel (jusqu'à 4 exercices) pour chaque
+# grand poste comptable, en plus du résumé de ratios déjà fourni par
+# get_fundamentals_summary(). Toutes les valeurs sont en milliards
+# d'unités de la devise native du titre, pour un affichage direct.
+BALANCE_ROWS = [
+    "Total Assets",
+    "Current Assets",
+    "Cash And Cash Equivalents",
+    "Total Liabilities Net Minority Interest",
+    "Current Liabilities",
+    "Total Debt",
+    "Total Equity Gross Minority Interest",
+]
+
+INCOME_ROWS = [
+    "Total Revenue",
+    "Gross Profit",
+    "Operating Income",
+    "EBITDA",
+    "Net Income",
+    "Diluted EPS",
+]
+
+CASHFLOW_ROWS = [
+    "Operating Cash Flow",
+    "Investing Cash Flow",
+    "Financing Cash Flow",
+    "Capital Expenditure",
+    "Free Cash Flow",
+]
 
 
-def _fmp_statement_to_json(entries: list, label_map: dict, scale_eps_labels=frozenset({"Diluted EPS"})):
-    """entries: liste FMP (une entrée = un exercice, la plus récente en
-    premier). Retourne {years, items} au même format que la version
-    précédente basée sur yfinance, pour ne rien changer côté frontend."""
-    if not entries:
+def _statement_to_json(df: pd.DataFrame, rows: list[str], scale_eps_rows: set[str] = frozenset({"Diluted EPS"})):
+    """Convertit un DataFrame yfinance (lignes = postes, colonnes = exercices)
+    en structure JSON {years:[...], items:[{label, values:[...]}]}.
+    Valeurs en milliards, sauf les postes par action (EPS) laissés tels quels.
+    Années les plus récentes en premier, limitées à 4 exercices."""
+    if df is None or df.empty:
         return {"years": [], "items": []}
 
-    entries = entries[:4]
-    years = [str(e.get("calendarYear") or (e.get("date", "")[:4])) for e in entries]
+    cols = list(df.columns)[:4]
+    years = [c.strftime("%Y") if hasattr(c, "strftime") else str(c) for c in cols]
 
     items = []
-    for label, fmp_key in label_map.items():
+    for row_name in rows:
+        if row_name not in df.index:
+            continue
         values = []
-        has_any = False
-        for e in entries:
-            v = e.get(fmp_key)
-            if v is None:
+        for c in cols:
+            v = df.loc[row_name, c]
+            if pd.isna(v):
                 values.append(None)
-                continue
-            has_any = True
-            if label in scale_eps_labels:
+            elif row_name in scale_eps_rows:
                 values.append(round(float(v), 2))
             else:
                 values.append(round(float(v) / 1e9, 3))
-        if has_any:
-            items.append({"label": label, "values": values})
+        items.append({"label": row_name, "values": values})
 
     return {"years": years, "items": items}
 
@@ -412,17 +243,31 @@ def get_financials(symbol: str) -> dict:
     if cached is not None:
         return cached
 
-    bs  = _fmp_get("balance-sheet-statement", {"symbol": symbol, "limit": 4})
-    inc = _fmp_get("income-statement", {"symbol": symbol, "limit": 4})
-    cf  = _fmp_get("cash-flow-statement", {"symbol": symbol, "limit": 4})
+    t = yf.Ticker(symbol)
+    try:
+        bs = t.balance_sheet
+    except Exception:
+        bs = None
+    try:
+        inc = t.financials
+    except Exception:
+        inc = None
+    try:
+        cf = t.cashflow
+    except Exception:
+        cf = None
 
     result = {
         "symbol":           symbol,
-        "balance_sheet":    _fmp_statement_to_json(bs  if isinstance(bs,  list) else [], BALANCE_MAP),
-        "income_statement": _fmp_statement_to_json(inc if isinstance(inc, list) else [], INCOME_MAP),
-        "cash_flow":        _fmp_statement_to_json(cf  if isinstance(cf,  list) else [], CASHFLOW_MAP),
+        "balance_sheet":    _statement_to_json(bs,  BALANCE_ROWS),
+        "income_statement": _statement_to_json(inc, INCOME_ROWS),
+        "cash_flow":        _statement_to_json(cf,  CASHFLOW_ROWS),
     }
 
+    # Si absolument aucune donnée n'a pu être récupérée, on ne met pas
+    # en cache (peut être un problème temporaire côté Yahoo Finance),
+    # pour retenter à la prochaine requête plutôt que de servir du vide
+    # pendant toute la durée du TTL.
     has_any = any(result[k]["items"] for k in ("balance_sheet", "income_statement", "cash_flow"))
     if has_any:
         cache_set_json(key, result, ttl=6 * 3600)

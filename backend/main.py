@@ -48,25 +48,22 @@ async def root():
 # ne pas re-déclencher le rate-limiting Yahoo Finance côté Render.
 
 MARKET_TICKERS = {
-    # NOUVEAU : liste réduite à 12 instruments (au lieu de 28) pour
-    # tenir dans le quota gratuit FMP (250 requêtes/jour) pendant la
-    # phase de test. Vous pourrez réélargir cette liste après passage
-    # à un plan FMP payant (voir OVERVIEW_TTL ci-dessous, à réduire
-    # aussi à ce moment-là pour des données plus fraîches).
-    "CAC 40": "^FCHI", "S&P 500": "^GSPC", "Nasdaq 100": "^NDX",
-    "Nikkei 225": "^N225", "Gold (XAU/USD)": "GC=F",
-    "LVMH": "MC.PA", "Sanofi": "SAN.PA",
-    "Apple": "AAPL", "Microsoft": "MSFT", "Nvidia": "NVDA",
-    "Tesla": "TSLA", "Amazon": "AMZN",
-}
-
-STOCK_NAMES = {
-    "LVMH", "Sanofi", "Apple", "Microsoft", "Nvidia", "Tesla", "Amazon",
+    # Indices
+    "CAC 40": "^FCHI", "DAX 40": "^GDAXI", "FTSE 100": "^FTSE", "SMI": "^SSMI",
+    "IBEX 35": "^IBEX", "S&P 500": "^GSPC", "Nasdaq 100": "^NDX", "Dow Jones": "^DJI",
+    "Nikkei 225": "^N225", "Hang Seng": "^HSI", "Sensex": "^BSESN", "ASX 200": "^AXJO",
+    "Gold (XAU/USD)": "GC=F", "Brent Crude": "BZ=F", "EUR/USD": "EURUSD=X",
+    # Actions (mêmes tickers que les cartes de la home page)
+    "LVMH": "MC.PA", "TotalEnergies": "TTE.PA", "Sanofi": "SAN.PA",
+    "BNP Paribas": "BNP.PA", "Airbus": "AIR.PA",
+    "Apple": "AAPL", "Microsoft": "MSFT", "Tesla": "TSLA",
+    "Nvidia": "NVDA", "Amazon": "AMZN", "Meta": "META",
+    "Nestlé": "NESN.SW", "Samsung": "005930.KS",
 }
 
 @app.get("/api/market-overview")
 def market_overview():
-    return get_market_overview(MARKET_TICKERS, fundamentals_for=STOCK_NAMES)
+    return get_market_overview(MARKET_TICKERS)
 
 
 # ════════════════════════════════════════════════════════════
