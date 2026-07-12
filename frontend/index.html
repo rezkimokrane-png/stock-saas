@@ -1163,38 +1163,25 @@ function authTab(id, el) {
 // ═══════════════════════════════════════════════════════════
 //  DONNÉES MARCHÉ — métadonnées statiques + valeurs live backend
 // ═══════════════════════════════════════════════════════════
+// NOUVEAU : liste réduite à 12 instruments (au lieu de 28) pour rester
+// dans le quota gratuit FMP (250 requêtes/jour) pendant la phase de
+// test. Doit rester synchronisée avec MARKET_TICKERS dans main.py.
 const INDICES = [
   { r:'europe', n:'CAC 40', reg:'France · Euronext', tv:'https://fr.tradingview.com/symbols/EURONEXT-PX1/', inv:'https://fr.investing.com/indices/france-40' },
-  { r:'europe', n:'DAX 40', reg:'Germany · Xetra', tv:'https://fr.tradingview.com/symbols/XETR-DAX/', inv:'https://fr.investing.com/indices/germany-30' },
-  { r:'europe', n:'FTSE 100', reg:'UK · LSE', tv:'https://fr.tradingview.com/symbols/LSE-UKX/', inv:'https://fr.investing.com/indices/uk-100' },
-  { r:'europe', n:'SMI', reg:'Switzerland · SIX', tv:'https://fr.tradingview.com/symbols/SIX-SMI/', inv:'https://fr.investing.com/indices/switzerland-20' },
-  { r:'europe', n:'IBEX 35', reg:'Spain · BME', tv:'https://fr.tradingview.com/symbols/BME-IBC/', inv:'https://fr.investing.com/indices/spain-35' },
   { r:'us', n:'S&P 500', reg:'USA · NYSE', tv:'https://fr.tradingview.com/symbols/SP-500/', inv:'https://fr.investing.com/indices/us-spx-500' },
   { r:'us', n:'Nasdaq 100', reg:'USA · Nasdaq', tv:'https://fr.tradingview.com/symbols/NASDAQ-NDX/', inv:'https://fr.investing.com/indices/nasdaq-100' },
-  { r:'us', n:'Dow Jones', reg:'USA · NYSE', tv:'https://fr.tradingview.com/symbols/DJ-30/', inv:'https://fr.investing.com/indices/us-30' },
   { r:'asia', n:'Nikkei 225', reg:'Japan · TSE', tv:'https://fr.tradingview.com/symbols/TVC-NI225/', inv:'https://fr.investing.com/indices/japan-ni225' },
-  { r:'asia', n:'Hang Seng', reg:'Hong Kong · HKEX', tv:'https://fr.tradingview.com/symbols/TVC-HSI/', inv:'https://fr.investing.com/indices/hang-sen-40' },
-  { r:'asia', n:'Sensex', reg:'India · BSE', tv:'https://fr.tradingview.com/symbols/BSE-SENSEX/', inv:'https://fr.investing.com/indices/sensex' },
-  { r:'asia', n:'ASX 200', reg:'Australia · ASX', tv:'https://fr.tradingview.com/symbols/ASX-XJO/', inv:'https://fr.investing.com/indices/aus-200' },
   { r:'commodity', n:'Gold (XAU/USD)', reg:'Commodity', tv:'https://fr.tradingview.com/symbols/TVC-GOLD/', inv:'https://fr.investing.com/commodities/gold' },
-  { r:'commodity', n:'Brent Crude', reg:'Commodity', tv:'https://fr.tradingview.com/symbols/UKOIL/', inv:'https://fr.investing.com/commodities/brent-oil' },
-  { r:'commodity', n:'EUR/USD', reg:'Forex', tv:'https://fr.tradingview.com/symbols/FX-EURUSD/', inv:'https://fr.investing.com/currencies/eur-usd' },
 ];
 
 const STOCKS = [
   { cat:'cac', n:'LVMH', tick:'MC.PA', sec:'Luxury', tv:'https://fr.tradingview.com/symbols/EURONEXT-MC/', inv:'https://fr.investing.com/equities/moet-hennessy' },
-  { cat:'cac', n:'TotalEnergies', tick:'TTE.PA', sec:'Energy', tv:'https://fr.tradingview.com/symbols/EURONEXT-TTE/', inv:'https://fr.investing.com/equities/total' },
   { cat:'cac', n:'Sanofi', tick:'SAN.PA', sec:'Pharma', tv:'https://fr.tradingview.com/symbols/EURONEXT-SAN/', inv:'https://fr.investing.com/equities/sanofi-aventis' },
-  { cat:'cac', n:'BNP Paribas', tick:'BNP.PA', sec:'Banking', tv:'https://fr.tradingview.com/symbols/EURONEXT-BNP/', inv:'https://fr.investing.com/equities/bnp-paribas' },
-  { cat:'cac', n:'Airbus', tick:'AIR.PA', sec:'Aerospace', tv:'https://fr.tradingview.com/symbols/EURONEXT-AIR/', inv:'https://fr.investing.com/equities/airbus-group' },
   { cat:'sp500', n:'Apple', tick:'AAPL', sec:'Technology', tv:'https://fr.tradingview.com/symbols/NASDAQ-AAPL/', inv:'https://fr.investing.com/equities/apple-computer-inc' },
   { cat:'sp500', n:'Microsoft', tick:'MSFT', sec:'Technology', tv:'https://fr.tradingview.com/symbols/NASDAQ-MSFT/', inv:'https://fr.investing.com/equities/microsoft-corp' },
   { cat:'sp500', n:'Tesla', tick:'TSLA', sec:'Auto/Tech', tv:'https://fr.tradingview.com/symbols/NASDAQ-TSLA/', inv:'https://fr.investing.com/equities/tesla-motors' },
   { cat:'nasdaq', n:'Nvidia', tick:'NVDA', sec:'Semiconductors', tv:'https://fr.tradingview.com/symbols/NASDAQ-NVDA/', inv:'https://fr.investing.com/equities/nvidia-corp' },
   { cat:'nasdaq', n:'Amazon', tick:'AMZN', sec:'E-commerce/Cloud', tv:'https://fr.tradingview.com/symbols/NASDAQ-AMZN/', inv:'https://fr.investing.com/equities/amazon-com-inc' },
-  { cat:'nasdaq', n:'Meta', tick:'META', sec:'Tech/Social', tv:'https://fr.tradingview.com/symbols/NASDAQ-META/', inv:'https://fr.investing.com/equities/facebook-inc' },
-  { cat:'world', n:'Nestlé', tick:'NESN.SW', sec:'Food & Beverage', tv:'https://fr.tradingview.com/symbols/SIX-NESN/', inv:'https://fr.investing.com/equities/nestle' },
-  { cat:'world', n:'Samsung', tick:'005930.KS', sec:'Tech/Semi', tv:'https://fr.tradingview.com/symbols/KRX-005930/', inv:'https://fr.investing.com/equities/samsung-electronics-co-ltd' },
 ];
 
 function applyQuote(obj, q) {
