@@ -370,6 +370,7 @@ footer{border-top:1px solid var(--border);padding:3rem 1.5rem 2rem;max-width:132
     <button class="tab" onclick="filterStocks('nasdaq',this)">Nasdaq</button>
     <button class="tab" onclick="filterStocks('world',this)">International</button>
   </div>
+  <div id="theme-banner"></div>
   <div class="cards" id="stocks-grid"></div>
 </div>
 
@@ -817,6 +818,7 @@ const LANGS = {
 };
 
 let currentLang = 'en';
+let activeTheme = null;
 
 function setLang(lang) {
   currentLang = lang;
@@ -1200,6 +1202,11 @@ function applyQuote(obj, q) {
   obj.v = q.price; obj.c = (q.change_pct>=0?'+':'')+q.change_pct.toFixed(2)+'%';
   obj.up = q.change_pct >= 0; obj.rsi = q.rsi != null ? q.rsi.toFixed(1) : '—';
   obj.sig = q.signal; obj.pts = q.points && q.points.length >= 2 ? q.points : [1,1];
+  // Champs fondamentaux (actions uniquement) pour le filtrage thématique réel
+  obj.f_sector = q.sector; obj.f_industry = q.industry; obj.f_pe = q.pe;
+  obj.f_peg = q.peg; obj.f_div = q.div_yield; obj.f_roe = q.roe;
+  obj.f_revg = q.rev_growth; obj.f_debteq = q.debt_eq; obj.f_cap = q.market_cap;
+  obj.f_payout = q.payout_ratio;
   obj._loaded = true;
 }
 
@@ -1298,13 +1305,49 @@ const MARKET_SYMBOL = { 'CAC 40':'^FCHI','DAX 40':'^GDAXI','FTSE 100':'^FTSE','S
 // ═══ STOCKS ═══
 let stockCat = 'cac';
 function filterStocks(cat, el) {
+  activeTheme = null;
   stockCat = cat;
   document.querySelectorAll('#stock-tabs .tab').forEach(t => t.classList.remove('active'));
   el.classList.add('active');
   renderStocks();
 }
 function renderStocks() {
-  document.getElementById('stocks-grid').innerHTML = STOCKS.filter(s => s.cat === stockCat).map(s => {
+  const L = LANGS[currentLang] || LANGS.en;
+  const tabsEl = document.getElementById('stock-tabs');
+  const bannerEl = document.getElementById('theme-banner');
+
+  if (activeTheme) {
+    tabsEl.style.display = 'none';
+    const theme = activeTheme;
+    const name = theme.title[currentLang] || theme.title.en;
+    if (theme.unsupported) {
+      bannerEl.innerHTML = `<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:.9rem 1.1rem;margin-bottom:1.2rem;display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
+        <span style="font-size:.85rem;color:var(--muted)">${theme.icon} <strong style="color:var(--text)">${name}</strong> — ${theme.desc[currentLang]||theme.desc.en}</span>
+        <button class="btn" onclick="clearTheme()">✕ ${currentLang==='fr'?'Effacer':'Clear'}</button>
+      </div>`;
+      document.getElementById('stocks-grid').innerHTML = '';
+      return;
+    }
+    const matches = STOCKS.filter(s => s._loaded && theme.match(s));
+    bannerEl.innerHTML = `<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:.9rem 1.1rem;margin-bottom:1.2rem;display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
+      <span style="font-size:.85rem;color:var(--muted)">${theme.icon} <strong style="color:var(--text)">${name}</strong> — ${matches.length} ${currentLang==='fr'?'résultat(s) dans votre univers suivi':'result(s) in your tracked universe'}</span>
+      <button class="btn" onclick="clearTheme()">✕ ${currentLang==='fr'?'Effacer':'Clear'}</button>
+    </div>`;
+    if (!matches.length) {
+      document.getElementById('stocks-grid').innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:2rem;color:var(--muted);font-size:.85rem">${currentLang==='fr'?'Aucune action de notre univers suivi ne correspond à ce thème actuellement.':'No stock in our tracked universe currently matches this theme.'}</div>`;
+      return;
+    }
+    renderStockCards(matches);
+    return;
+  }
+
+  tabsEl.style.display = '';
+  bannerEl.innerHTML = '';
+  renderStockCards(STOCKS.filter(s => s.cat === stockCat));
+}
+
+function renderStockCards(list) {
+  document.getElementById('stocks-grid').innerHTML = list.map(s => {
     if (!s._loaded) return `<div class="card"><div class="ct"><div><div class="cn">${s.n}</div><div class="ck">${s.tick} · ${s.sec}</div></div></div><span class="skeleton" style="width:100%;height:60px"></span></div>`;
     return `
     <div class="card ${s.sig}" onclick="openStock('${s.n}')">
@@ -1501,32 +1544,49 @@ function apTab(id, el) {
   el.classList.add('active'); document.getElementById(id).classList.add('active');
 }
 
-// ═══ IDEAS (thematic, static — not live market data) ═══
+// ═══ IDEAS — filtrage thématique RÉEL sur les 13 actions suivies ═══
+// Honnêteté : notre univers actuel est limité à ces actions vedettes
+// (pas un screener sur des milliers d'actions). Les thèmes sans
+// correspondance fiable dans cet univers sont marqués `unsupported`
+// et l'affichent clairement au lieu de faire semblant.
+const THEMES = [
+  {icon:'🤖', key:'ai', title:{en:'Artificial Intelligence',fr:'Intelligence Artificielle',es:'Inteligencia Artificial',ar:'الذكاء الاصطناعي',zh:'人工智能'}, desc:{en:'Tech leaders exposed to AI.',fr:'Leaders tech exposés à l\u2019IA.',es:'Líderes tech expuestos a la IA.',ar:'شركات تقنية رائدة في الذكاء الاصطناعي.',zh:'AI相关科技领导者。'}, match:s=>['NVDA','MSFT','META','AAPL','AMZN'].includes(s.tick)},
+  {icon:'💰', key:'div', title:{en:'High Dividends',fr:'Hauts Dividendes',es:'Altos Dividendos',ar:'توزيعات مرتفعة',zh:'高股息'}, desc:{en:'Dividend yield ≥ 3%.',fr:'Rendement du dividende ≥ 3 %.',es:'Rendimiento de dividendo ≥ 3%.',ar:'عائد توزيعات ≥ 3%.',zh:'股息收益率≥3%。'}, match:s=>s.f_div!=null && s.f_div>=3},
+  {icon:'⚡', key:'nuclear', title:{en:'Nuclear Energy',fr:'Énergie Nucléaire',es:'Energía Nuclear',ar:'الطاقة النووية',zh:'核能'}, desc:{en:'No match in our tracked universe yet.',fr:'Aucune correspondance dans notre univers actuel.',es:'Sin coincidencias en nuestro universo actual.',ar:'لا توجد نتائج في نطاقنا الحالي.',zh:'当前跟踪范围内暂无匹配。'}, unsupported:true},
+  {icon:'🔋', key:'ev', title:{en:'Electric Vehicles',fr:'Véhicules Électriques',es:'Vehículos Eléctricos',ar:'السيارات الكهربائية',zh:'电动汽车'}, desc:{en:'Tomorrow\u2019s mobility leaders.',fr:'Leaders de la mobilité de demain.',es:'Líderes de la movilidad.',ar:'قادة تنقل الغد.',zh:'未来出行领导者。'}, match:s=>s.tick==='TSLA'},
+  {icon:'💊', key:'biotech', title:{en:'Pharma / Biotech',fr:'Pharma / Biotech',es:'Farma / Biotech',ar:'الأدوية والتقنية الحيوية',zh:'制药/生物科技'}, desc:{en:'Healthcare & pharmaceutical exposure.',fr:'Exposition santé et pharmaceutique.',es:'Exposición a salud y farmacéutica.',ar:'قطاع الصحة والأدوية.',zh:'医疗保健与制药领域。'}, match:s=>s.sec==='Pharma'},
+  {icon:'📉', key:'value', title:{en:'Undervalued (low P/E)',fr:'Sous-évalués (P/E bas)',es:'Infravalorados (P/E bajo)',ar:'مقيّمة بأقل (P/E منخفض)',zh:'低估值(低市盈率)'}, desc:{en:'P/E ratio under 15.',fr:'Ratio P/E inférieur à 15.',es:'Ratio P/E inferior a 15.',ar:'مضاعف ربح أقل من 15.',zh:'市盈率低于15。'}, match:s=>s.f_pe!=null && s.f_pe>0 && s.f_pe<15},
+  {icon:'🏠', key:'reit', title:{en:'Real Estate (REITs)',fr:'Immobilier (REITs)',es:'Inmobiliario (REITs)',ar:'العقارات',zh:'房地产'}, desc:{en:'No match in our tracked universe yet.',fr:'Aucune correspondance dans notre univers actuel.',es:'Sin coincidencias en nuestro universo actual.',ar:'لا توجد نتائج في نطاقنا الحالي.',zh:'当前跟踪范围内暂无匹配。'}, unsupported:true},
+  {icon:'🔐', key:'cyber', title:{en:'Cybersecurity',fr:'Cybersécurité',es:'Ciberseguridad',ar:'الأمن السيبراني',zh:'网络安全'}, desc:{en:'No match in our tracked universe yet.',fr:'Aucune correspondance dans notre univers actuel.',es:'Sin coincidencias en nuestro universo actual.',ar:'لا توجد نتائج في نطاقنا الحالي.',zh:'当前跟踪范围内暂无匹配。'}, unsupported:true},
+  {icon:'☀️', key:'green', title:{en:'Renewable Energy',fr:'Énergies Renouvelables',es:'Energías Renovables',ar:'الطاقة المتجددة',zh:'可再生能源'}, desc:{en:'No match in our tracked universe yet.',fr:'Aucune correspondance dans notre univers actuel.',es:'Sin coincidencias en nuestro universo actual.',ar:'لا توجد نتائج في نطاقنا الحالي.',zh:'当前跟踪范围内暂无匹配。'}, unsupported:true},
+  {icon:'🏅', key:'insider', title:{en:'Insider Buying',fr:'Achats Initiés',es:'Compras Internas',ar:'شراء المطلعين',zh:'内部人士买入'}, desc:{en:'Data source not available yet.',fr:'Source de données pas encore disponible.',es:'Fuente de datos aún no disponible.',ar:'مصدر البيانات غير متاح بعد.',zh:'数据源暂不可用。'}, unsupported:true},
+  {icon:'💎', key:'smallcap', title:{en:'Smaller Caps (in this list)',fr:'Plus petites capis (de la liste)',es:'Capis más pequeñas (de la lista)',ar:'رساميل أصغر (من القائمة)',zh:'较小市值(本列表内)'}, desc:{en:'Market cap under $150B.',fr:'Capitalisation inférieure à 150 Md$.',es:'Capitalización inferior a 150 Md$.',ar:'قيمة سوقية أقل من 150 مليار دولار.',zh:'市值低于1500亿美元。'}, match:s=>s.f_cap!=null && s.f_cap<150e9},
+  {icon:'📊', key:'garp', title:{en:'GARP Investing',fr:'Investissement GARP',es:'Inversión GARP',ar:'استثمار GARP',zh:'GARP投资'}, desc:{en:'PEG < 1.5 with revenue growth > 15%.',fr:'PEG < 1,5 avec croissance CA > 15 %.',es:'PEG < 1,5 con crecimiento > 15%.',ar:'PEG < 1.5 مع نمو إيرادات > 15%.',zh:'PEG<1.5且收入增长>15%。'}, match:s=>s.f_peg!=null && s.f_peg>0 && s.f_peg<1.5 && s.f_revg!=null && s.f_revg>15}
+];
+
 function renderIdeas() {
   const lang = currentLang;
-  const IDEAS = [
-    {icon:'🤖', title:{en:'Artificial Intelligence',fr:'Intelligence Artificielle',es:'Inteligencia Artificial',ar:'الذكاء الاصطناعي',zh:'人工智能'}, desc:{en:'NVIDIA, Microsoft, Alphabet — AI revolution leaders.',fr:'NVIDIA, Microsoft, Alphabet — leaders de la révolution IA.',es:'NVIDIA, Microsoft, Alphabet — líderes de la IA.',ar:'قادة ثورة الذكاء الاصطناعي.',zh:'AI革命领导者。'}},
-    {icon:'💰', title:{en:'High Dividends',fr:'Hauts Dividendes',es:'Altos Dividendos',ar:'توزيعات مرتفعة',zh:'高股息'}, desc:{en:'High-yield stocks with solid payment history.',fr:'Actions à haut rendement.',es:'Acciones de alto rendimiento.',ar:'أسهم عالية العائد.',zh:'高收益股票。'}},
-    {icon:'⚡', title:{en:'Nuclear Energy',fr:'Énergie Nucléaire',es:'Energía Nuclear',ar:'الطاقة النووية',zh:'核能'}, desc:{en:'Global nuclear renaissance.',fr:'Renaissance nucléaire mondiale.',es:'Renacimiento nuclear global.',ar:'النهضة النووية العالمية.',zh:'全球核能复兴。'}},
-    {icon:'🔋', title:{en:'Electric Vehicles',fr:'Véhicules Électriques',es:'Vehículos Eléctricos',ar:'السيارات الكهربائية',zh:'电动汽车'}, desc:{en:"Tomorrow's mobility leaders.",fr:'Leaders de la mobilité de demain.',es:'Líderes de la movilidad.',ar:'قادة تنقل الغد.',zh:'未来出行领导者。'}},
-    {icon:'💊', title:{en:'Biotechnology',fr:'Biotechnologie',es:'Biotecnología',ar:'التكنولوجيا الحيوية',zh:'生物科技'}, desc:{en:'Major therapeutic innovations.',fr:'Grandes innovations thérapeutiques.',es:'Innovaciones terapéuticas.',ar:'ابتكارات علاجية كبرى.',zh:'重大治疗创新。'}},
-    {icon:'📉', title:{en:'Undervalued (DCF)',fr:'Sous-évalués (DCF)',es:'Infravalorados (DCF)',ar:'مقيّمة بأقل',zh:'被低估(DCF)'}, desc:{en:'Discounted stocks based on cash flows.',fr:'Actions décotées.',es:'Acciones con descuento.',ar:'أسهم مخفّضة.',zh:'现金流折现低估股票。'}},
-    {icon:'🏠', title:{en:'Real Estate (REITs)',fr:'Immobilier (REITs)',es:'Inmobiliario (REITs)',ar:'العقارات',zh:'房地产'}, desc:{en:'Diversified real estate income.',fr:'Revenus immobiliers diversifiés.',es:'Ingresos inmobiliarios.',ar:'دخل عقاري متنوع.',zh:'多元化房地产收益。'}},
-    {icon:'🔐', title:{en:'Cybersecurity',fr:'Cybersécurité',es:'Ciberseguridad',ar:'الأمن السيبراني',zh:'网络安全'}, desc:{en:'Critical systems protection.',fr:'Protection des systèmes critiques.',es:'Protección de sistemas.',ar:'حماية الأنظمة الحيوية.',zh:'关键系统保护。'}},
-    {icon:'☀️', title:{en:'Renewable Energy',fr:'Énergies Renouvelables',es:'Energías Renovables',ar:'الطاقة المتجددة',zh:'可再生能源'}, desc:{en:'Clean energy transition.',fr:"Transition vers l'énergie propre.",es:'Transición energética.',ar:'التحول للطاقة النظيفة.',zh:'清洁能源转型。'}},
-    {icon:'🏅', title:{en:'Insider Buying',fr:'Achats Initiés',es:'Compras Internas',ar:'شراء المطلعين',zh:'内部人士买入'}, desc:{en:'Stocks where executives buy heavily.',fr:'Actions où les dirigeants achètent.',es:'Acciones donde ejecutivos compran.',ar:'أسهم يشتريها المسؤولون.',zh:'高管大量买入的股票。'}},
-    {icon:'💎', title:{en:'Hidden Gems',fr:'Pépites Cachées',es:'Joyas Ocultas',ar:'الجواهر المخفية',zh:'隐藏珍宝'}, desc:{en:'Small caps with strong fundamentals.',fr:'Petites capitalisations solides.',es:'Pequeñas capitalizaciones.',ar:'أسهم صغيرة متينة.',zh:'基本面强劲的小市值股票。'}},
-    {icon:'📊', title:{en:'GARP Investing',fr:'Investissement GARP',es:'Inversión GARP',ar:'استثمار GARP',zh:'GARP投资'}, desc:{en:'PEG < 1 with strong earnings growth.',fr:'PEG < 1 avec forte croissance.',es:'PEG < 1 con crecimiento fuerte.',ar:'PEG < 1 مع نمو قوي.',zh:'PEG<1且盈利增长强劲。'}}
-  ];
-  document.getElementById('ideas-grid').innerHTML = IDEAS.map(i =>
-    `<div class="idea" onclick="goto('stocks')">
+  document.getElementById('ideas-grid').innerHTML = THEMES.map((i,idx) =>
+    `<div class="idea" onclick="applyTheme(${idx})" style="${i.unsupported?'opacity:.55':''}">
       <div style="font-size:1.3rem;margin-bottom:.6rem">${i.icon}</div>
-      <div style="font-family:var(--serif);font-size:.9rem;font-weight:700;margin-bottom:.3rem">${i.title[lang]||i.title.en}</div>
+      <div style="font-family:var(--serif);font-size:.9rem;font-weight:700;margin-bottom:.3rem">${i.title[lang]||i.title.en}${i.unsupported?' <span style="font-size:.6rem;color:var(--muted)">(N/A)</span>':''}</div>
       <div style="font-size:.75rem;color:var(--muted);line-height:1.5;font-weight:300">${i.desc[lang]||i.desc.en}</div>
     </div>`
   ).join('');
 }
 renderIdeas();
+
+function applyTheme(idx) {
+  const theme = THEMES[idx];
+  activeTheme = theme;
+  goto('stocks');
+  renderStocks();
+}
+
+function clearTheme() {
+  activeTheme = null;
+  renderStocks();
+}
 
 // ═══ FORECAST TEASER (page d'accueil — réutilise l'aperçu marché, pas d'appel supplémentaire) ═══
 function renderForecastTeaser(data) {
