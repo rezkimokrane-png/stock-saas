@@ -1,112 +1,156 @@
-import os, io, json
-import yfinance as yf
+import os, json, time
 import pandas as pd
+import numpy as np
 import warnings
 warnings.filterwarnings("ignore")
 
-# ── Cache Redis optionnel (dégradé gracieusement si absent) ──
+# ── Cache mémoire (fallback si pas de Redis) ─────────────────
 try:
     import redis
     _redis = redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
     _redis.ping()
     REDIS_OK = True
 except Exception:
-    _redis   = None
+    _redis = None
     REDIS_OK = False
 
-CACHE_TTL = 300  # 5 minutes
+CACHE_TTL = 1800   # 30 min — réduit les appels répétés à Yahoo
+_mem_cache: dict = {}
+_FAILED = "__FAILED__"
 
 
-def _json_default(o):
-    """Convertit les types numpy/pandas non sérialisables en JSON natif."""
-    if hasattr(o, "item"):   # numpy scalar (int64, float64, bool_...)
-        return o.item()
-    return str(o)
-
-
-def cache_get_raw(key: str):
-    """Lit une chaîne brute dans le cache (pas de json.loads)."""
-    if not REDIS_OK:
-        return None
-    try:
-        return _redis.get(key)
-    except Exception:
-        return None
-
-
-def cache_set_raw(key: str, value: str, ttl: int = CACHE_TTL):
-    if not REDIS_OK:
-        return
-    try:
-        _redis.setex(key, ttl, value)
-    except Exception:
-        pass
-
-
-def cache_get_json(key: str):
-    raw = cache_get_raw(key)
-    if raw is None:
-        return None
-    try:
-        return json.loads(raw)
-    except Exception:
-        return None
-
-
-def cache_set_json(key: str, value, ttl: int = CACHE_TTL):
-    try:
-        payload = json.dumps(value, default=_json_default)
-    except Exception:
-        return
-    cache_set_raw(key, payload, ttl)
-
-
-# ── Données OHLCV ────────────────────────────────────────────
-# BUG CORRIGÉ : l'ancienne version sérialisait le DataFrame via
-# `.to_dict()` puis `json.dumps()`. Les colonnes OHLCV contiennent des
-# types numpy (int64/float64) que `json.dumps` ne sait pas encoder ; ça
-# levait une exception à CHAQUE écriture, silencieusement avalée par le
-# try/except du cache. Résultat : le cache Redis pour l'historique de
-# prix ne fonctionnait jamais, et chaque analyse retapait yfinance.
-# On utilise maintenant `DataFrame.to_json()` / `pd.read_json()`, qui
-# gèrent nativement les types numpy et les dates.
-def get_ohlcv(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
-    key = f"ohlcv:{symbol}:{period}:{interval}"
-    cached = cache_get_raw(key)
-    if cached:
+def _cache_get(key: str):
+    if REDIS_OK:
         try:
-            df = pd.read_json(io.StringIO(cached), orient="records", convert_dates=["Date"])
-            if not df.empty:
-                return df.set_index("Date")
+            v = _redis.get(key)
+            return json.loads(v) if v else None
         except Exception:
             pass
+    entry = _mem_cache.get(key)
+    if entry:
+        value, exp = entry
+        if time.time() < exp:
+            return value
+        del _mem_cache[key]
+    return None
 
-    df = yf.Ticker(symbol).history(period=period, interval=interval)
-    if df.empty:
+
+def _cache_set(key: str, value, ttl=CACHE_TTL):
+    if REDIS_OK:
+        try:
+            _redis.setex(key, ttl, json.dumps(value))
+            return
+        except Exception:
+            pass
+    _mem_cache[key] = (value, time.time() + ttl)
+
+
+# ── Stooq : données OHLCV (fiable depuis cloud) ──────────────
+def _stooq_symbol(symbol: str) -> str:
+    """Convertit un ticker Yahoo en symbole Stooq."""
+    s = symbol.upper()
+    # Paris → .fr, Amsterdam → .nl, etc.
+    mapping = {
+        ".PA": ".fr", ".AS": ".nl", ".L": ".uk",
+        ".DE": ".de", ".MI": ".it", ".MC": ".es",
+    }
+    for yf_suffix, stooq_suffix in mapping.items():
+        if s.endswith(yf_suffix):
+            return s.replace(yf_suffix, stooq_suffix)
+    return s  # US ticker → inchangé (Stooq supporte AAPL, MSFT, etc.)
+
+
+def _fetch_stooq(symbol: str, period: str = "1y") -> pd.DataFrame:
+    """Récupère l'historique via Stooq (pas de blocage cloud)."""
+    import pandas_datareader.data as web
+    from datetime import date, timedelta
+    periods = {"1y": 365, "2y": 730, "3y": 1095, "5y": 1825}
+    days = periods.get(period, 365)
+    end   = date.today()
+    start = end - timedelta(days=days)
+    stooq_sym = _stooq_symbol(symbol)
+    try:
+        df = web.DataReader(stooq_sym, "stooq", start, end)
+        df = df.sort_index()
+        df.columns = [c.title() for c in df.columns]  # Open/High/Low/Close/Volume
+        return df
+    except Exception as e:
+        print(f"[stooq] {symbol} ({stooq_sym}) failed: {e}")
+        return pd.DataFrame()
+
+
+# ── yfinance : fondamentaux uniquement ───────────────────────
+def _fetch_yf_info(symbol: str) -> dict:
+    try:
+        import yfinance as yf
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+        if info and isinstance(info, dict) and info.get("regularMarketPrice"):
+            return info
+        # fallback fast_info
+        fi = ticker.fast_info
+        return {
+            "regularMarketPrice": getattr(fi, "last_price", None),
+            "currency":           getattr(fi, "currency", "USD"),
+            "longName":           symbol,
+        }
+    except Exception as e:
+        print(f"[yf_info] {symbol} failed: {e}")
+        return {}
+
+
+# ── API publique ──────────────────────────────────────────────
+def get_ohlcv(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
+    key = f"ohlcv:{symbol}:{period}"
+    cached = _cache_get(key)
+    if cached == _FAILED:
+        return pd.DataFrame()
+    if cached:
+        df = pd.DataFrame(cached)
+        df.index = pd.to_datetime(df.index)
         return df
 
-    try:
-        payload = df.reset_index().rename(columns={df.index.name or "index": "Date"}).to_json(
-            orient="records", date_format="iso"
-        )
-        cache_set_raw(key, payload, ttl=120)
-    except Exception:
-        pass
+    df = _fetch_stooq(symbol, period)
+    if df.empty:
+        _cache_set(key, _FAILED, ttl=60)
+        return df
+
+    _cache_set(key, df.reset_index()
+               .assign(Date=lambda x: x["Date"].dt.strftime("%Y-%m-%d"))
+               .set_index("Date").to_dict(), ttl=CACHE_TTL)
     return df
 
 
-# ── Infos fondamentales ───────────────────────────────────────
 def get_info(symbol: str) -> dict:
     key = f"info:{symbol}"
-    cached = cache_get_json(key)
-    if cached is not None:
+    cached = _cache_get(key)
+    if cached == _FAILED:
+        return {}
+    if cached:
         return cached
-    info = yf.Ticker(symbol).info or {}
-    cache_set_json(key, info, ttl=3600)
+
+    info = _fetch_yf_info(symbol)
+    if not info:
+        # Construire un info minimal depuis Stooq
+        df = get_ohlcv(symbol, "1y")
+        if not df.empty and "Close" in df.columns:
+            price = float(df["Close"].iloc[-1])
+            info = {
+                "regularMarketPrice": price,
+                "currentPrice":       price,
+                "longName":           symbol,
+                "currency":           "USD",
+            }
+            print(f"[fallback info] Prix Stooq pour {symbol}: {price}")
+
+    if not info:
+        _cache_set(key, _FAILED, ttl=60)
+        return {}
+
+    _cache_set(key, info, ttl=CACHE_TTL)
     return info
 
 
-# ── Prix temps réel ───────────────────────────────────────────
 def get_price(symbol: str) -> float | None:
     info = get_info(symbol)
     return info.get("regularMarketPrice") or info.get("currentPrice")

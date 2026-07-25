@@ -1,4 +1,4 @@
-import os
+﻿import os
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -10,15 +10,15 @@ from . import models
 from .db import engine, get_db
 from . import auth
 from . import stripe_payments
-from .data.market import get_ohlcv, get_info, get_price
+from .data.market import get_ohlcv, get_info, get_price, get_financials, get_market_overview
 from .engine.indicators import add_indicators, get_signals, serialize_ohlcv
 from .engine.scoring import compute_score, get_fundamentals_summary
 from .engine.forecasting import forecast_short, forecast_mid, forecast_long
 
-# ── Init DB ──────────────────────────────────────────────────
+# â”€â”€ Init DB â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 models.Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="StockSaaS API", version="1.0.0")
+app = FastAPI(title="StockSaaS API", version="1.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -27,7 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Servir le frontend ───────────────────────────────────────
+# â”€â”€ Servir le frontend â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 FRONTEND = os.path.join(os.path.dirname(__file__), "..", "frontend")
 if os.path.isdir(FRONTEND):
     app.mount("/static", StaticFiles(directory=FRONTEND), name="static")
@@ -40,9 +40,35 @@ async def root():
     return {"status": "StockSaaS API running"}
 
 
-# ════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+#  APERÃ‡U MARCHÃ‰ (page d'accueil â€” public, non rate-limitÃ©)
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# NOUVEAU : sert les grilles d'indices/actions de la home page.
+# Volontairement public et mutualisÃ© (voir get_market_overview) pour
+# ne pas re-dÃ©clencher le rate-limiting Yahoo Finance cÃ´tÃ© Render.
+
+MARKET_TICKERS = {
+    # Indices
+    "CAC 40": "^FCHI", "DAX 40": "^GDAXI", "FTSE 100": "^FTSE", "SMI": "^SSMI",
+    "IBEX 35": "^IBEX", "S&P 500": "^GSPC", "Nasdaq 100": "^NDX", "Dow Jones": "^DJI",
+    "Nikkei 225": "^N225", "Hang Seng": "^HSI", "Sensex": "^BSESN", "ASX 200": "^AXJO",
+    "Gold (XAU/USD)": "GC=F", "Brent Crude": "BZ=F", "EUR/USD": "EURUSD=X",
+    # Actions (mÃªmes tickers que les cartes de la home page)
+    "LVMH": "MC.PA", "TotalEnergies": "TTE.PA", "Sanofi": "SAN.PA",
+    "BNP Paribas": "BNP.PA", "Airbus": "AIR.PA",
+    "Apple": "AAPL", "Microsoft": "MSFT", "Tesla": "TSLA",
+    "Nvidia": "NVDA", "Amazon": "AMZN", "Meta": "META",
+    "NestlÃ©": "NESN.SW", "Samsung": "005930.KS",
+}
+
+@app.get("/api/market-overview")
+def market_overview():
+    return get_market_overview(MARKET_TICKERS)
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  AUTH
-# ════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class RegisterBody(BaseModel):
     email:     EmailStr
@@ -57,9 +83,9 @@ class LoginBody(BaseModel):
 @app.post("/api/auth/register")
 def register(body: RegisterBody, db: Session = Depends(get_db)):
     if len(body.password) < 8:
-        raise HTTPException(400, "Le mot de passe doit faire au moins 8 caractères")
+        raise HTTPException(400, "Le mot de passe doit faire au moins 8 caractÃ¨res")
     if db.query(models.User).filter(models.User.email == body.email).first():
-        raise HTTPException(400, "Email déjà utilisé")
+        raise HTTPException(400, "Email dÃ©jÃ  utilisÃ©")
     user = models.User(
         email=body.email,
         password_hash=auth.hash_password(body.password),
@@ -68,7 +94,8 @@ def register(body: RegisterBody, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
-    return {"token": auth.create_token(user.id), "plan": user.plan, "email": user.email}
+    return {"token": auth.create_token(user.id), "plan": user.plan, "email": user.email,
+            "full_name": user.full_name}
 
 
 @app.post("/api/auth/login")
@@ -88,9 +115,9 @@ def me(user: models.User = Depends(auth.get_current_user)):
     }
 
 
-# ════════════════════════════════════════════════════════════
-#  ANALYSE PRINCIPALE
-# ════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+#  ANALYSE PRINCIPALE (prix, indicateurs, score, prÃ©visions)
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @app.get("/api/analysis/{symbol}")
 def analysis(
@@ -99,10 +126,6 @@ def analysis(
     db:      Session = Depends(get_db),
     user:    models.User = Depends(auth.get_current_user_optional),
 ):
-    # Rate limiting : connectés (par plan) et anonymes (par IP).
-    # BUG CORRIGÉ : avant, un visiteur sans compte n'était jamais
-    # rate-limité (le check n'existait que dans le `if user:`), ce qui
-    # permettait un usage illimité gratuit et sans friction d'inscription.
     if user:
         auth.check_rate_limit(user, db)
     else:
@@ -116,7 +139,7 @@ def analysis(
 
     df = get_ohlcv(sym)
     if df.empty:
-        raise HTTPException(404, "Données historiques indisponibles")
+        raise HTTPException(404, "DonnÃ©es historiques indisponibles")
 
     df      = add_indicators(df)
     signals = get_signals(df)
@@ -124,7 +147,6 @@ def analysis(
     fundas  = get_fundamentals_summary(info)
     ohlcv   = serialize_ohlcv(df)
 
-    # Prévisions limitées selon le plan
     plan     = user.plan if user else "free"
     short_fc = forecast_short(sym, fundas["currency"])
     mid_fc   = forecast_mid(sym, fundas["currency"])  if plan in ("pro", "premium") else {}
@@ -137,6 +159,7 @@ def analysis(
         "fundamentals": fundas,
         "signals":      signals,
         "ohlcv":        ohlcv,
+        "sentiment": sentiment,
         "forecast": {
             "short": short_fc,
             "mid":   mid_fc,
@@ -145,9 +168,33 @@ def analysis(
     }
 
 
-# ════════════════════════════════════════════════════════════
-#  WATCHLIST
-# ════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+#  Ã‰TATS FINANCIERS COMPLETS (bilan, rÃ©sultats, trÃ©sorerie)
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# NOUVEAU : rÃ©servÃ© aux plans Pro/Premium, cohÃ©rent avec le lock dÃ©jÃ 
+# prÃ©sent cÃ´tÃ© frontend sur l'onglet "Financials".
+
+@app.get("/api/financials/{symbol}")
+def financials(
+    symbol: str,
+    db:     Session = Depends(get_db),
+    user:   models.User = Depends(auth.get_current_user),
+):
+    if user.plan == "free":
+        raise HTTPException(
+            403,
+            "Les Ã©tats financiers complets (bilan, rÃ©sultats, trÃ©sorerie) sont rÃ©servÃ©s aux plans Pro et Premium."
+        )
+    sym = symbol.upper()
+    data = get_financials(sym)
+    if not any(data[k]["items"] for k in ("balance_sheet", "income_statement", "cash_flow")):
+        raise HTTPException(404, f"Ã‰tats financiers indisponibles pour {sym}")
+    return data
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+#  WATCHLIST (sert aussi de "favoris" cÃ´tÃ© frontend)
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @app.get("/api/watchlist")
 def get_watchlist(
@@ -173,7 +220,7 @@ def add_to_watchlist(
         models.Watchlist.symbol  == symbol.upper(),
     ).first()
     if exists:
-        raise HTTPException(400, "Déjà dans la watchlist")
+        raise HTTPException(400, "DÃ©jÃ  dans la watchlist")
     if user.plan == "free":
         count = db.query(models.Watchlist).filter(models.Watchlist.user_id == user.id).count()
         if count >= 5:
@@ -197,9 +244,9 @@ def remove_from_watchlist(
     return {"ok": True}
 
 
-# ════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  STRIPE
-# ════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @app.get("/api/billing/checkout/{plan}")
 def checkout(
@@ -220,8 +267,6 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
         session = event["data"]["object"]
         user_id = int(session.get("client_reference_id") or 0)
         sub_id  = session.get("subscription")
-        # BUG CORRIGÉ : le plan était mis en dur à "pro" pour tout le
-        # monde. On le résout maintenant depuis les metadata / line items.
         plan = stripe_payments.resolve_plan_from_session(session)
         user = db.query(models.User).filter(models.User.id == user_id).first()
         if user:
@@ -250,13 +295,36 @@ def cancel_subscription(
     if not user.stripe_sub_id:
         raise HTTPException(400, "Aucun abonnement actif")
     stripe_payments.cancel_subscription(user.stripe_sub_id)
-    return {"ok": True, "message": "Abonnement annulé en fin de période"}
+    return {"ok": True, "message": "Abonnement annulÃ© en fin de pÃ©riode"}
 
 
-# ════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+#  NEWSLETTER
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# NOUVEAU : endpoint minimal pour remplacer l'appel Supabase
+# (sb.from('newsletter_subscribers').insert) qui n'existe plus.
+
+@app.post("/api/newsletter")
+def newsletter_subscribe(body: dict, db: Session = Depends(get_db)):
+    email = (body or {}).get("email", "").strip()
+    if not email or "@" not in email:
+        raise HTTPException(400, "Email invalide")
+    exists = db.query(models.NewsletterSubscriber).filter(
+        models.NewsletterSubscriber.email == email
+    ).first()
+    if not exists:
+        db.add(models.NewsletterSubscriber(email=email))
+        db.commit()
+    return {"ok": True}
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  HEALTH
-# ════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "1.0.0"}
+    return {"status": "ok", "version": "1.1.0"}
+
+
+
