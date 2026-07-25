@@ -10,7 +10,7 @@ from . import models
 from .db import engine, get_db
 from . import auth
 from . import stripe_payments
-from .data.market import get_ohlcv, get_info, get_price, get_financials, get_market_overview
+from backend.data.market import get_ohlcv, get_info, get_price
 from .engine.indicators import add_indicators, get_signals, serialize_ohlcv
 from .engine.scoring import compute_score, get_fundamentals_summary
 from .engine.forecasting import forecast_short, forecast_mid, forecast_long
@@ -325,6 +325,7 @@ def newsletter_subscribe(body: dict, db: Session = Depends(get_db)):
 @app.get("/health")
 def health():
     return {"status": "ok", "version": "1.1.0"}
+
 
 
 
