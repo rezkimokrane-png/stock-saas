@@ -7,14 +7,9 @@ from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from statsmodels.tsa.stattools import adfuller
 
-from ..data.market import get_ohlcv, cache_get_json, cache_set_json
+from ..data.market import get_ohlcv, _cache_get as cache_get_json, _cache_set as cache_set_json
 
-# PERF : chaque analyse appelait forecast_short() en synchrone, qui fait
-# une recherche de grille ARIMA (jusqu'à 16 fits) à CHAQUE requête, même
-# pour le même titre demandé 10 fois dans la journée. On met en cache le
-# résultat (les prévisions n'ont pas besoin d'être recalculées plus
-# souvent qu'une fois par heure) et on réduit la grille de recherche.
-FORECAST_TTL = 3600  # 1 heure
+FORECAST_TTL = 3600
 
 
 def _is_stationary(s: np.ndarray) -> bool:
@@ -27,8 +22,6 @@ def _is_stationary(s: np.ndarray) -> bool:
 def _best_order(s: np.ndarray) -> tuple:
     best_aic, best_order = np.inf, (1, 1, 1)
     d = 0 if _is_stationary(s) else 1
-    # Grille réduite (0..2 au lieu de 0..3) : ~4x moins de fits ARIMA,
-    # gain de perf important sans perte de qualité notable en pratique.
     for p in range(0, 3):
         for q in range(0, 3):
             try:
@@ -88,7 +81,6 @@ def _cache_key(kind: str, symbol: str, currency: str) -> str:
     return f"forecast:{kind}:{symbol}:{currency}:{date.today()}"
 
 
-# ── Court terme : ARIMA — 30 jours ───────────────────────────
 def forecast_short(symbol: str, currency: str = "USD") -> dict:
     key = _cache_key("short", symbol, currency)
     cached = cache_get_json(key)
@@ -117,7 +109,6 @@ def forecast_short(symbol: str, currency: str = "USD") -> dict:
         return {}
 
 
-# ── Moyen terme : SARIMA hebdo — 3 mois ──────────────────────
 def forecast_mid(symbol: str, currency: str = "USD") -> dict:
     key = _cache_key("mid", symbol, currency)
     cached = cache_get_json(key)
@@ -137,7 +128,6 @@ def forecast_mid(symbol: str, currency: str = "USD") -> dict:
         ci      = np.exp(fc_obj.conf_int(alpha=0.20))
         dates   = _dates(df.index[-1], steps, "B")
 
-        # Agréger en semaines pour le graphique
         fc_df = pd.DataFrame({
             "date":     pd.to_datetime(dates),
             "forecast": fc_mean.values,
@@ -177,7 +167,6 @@ def forecast_mid(symbol: str, currency: str = "USD") -> dict:
         return {}
 
 
-# ── Long terme : SARIMA annuel — 52 semaines ─────────────────
 def forecast_long(symbol: str, currency: str = "USD") -> dict:
     key = _cache_key("long", symbol, currency)
     cached = cache_get_json(key)
@@ -210,3 +199,4 @@ def forecast_long(symbol: str, currency: str = "USD") -> dict:
     except Exception as e:
         print(f"[long] {e}")
         return {}
+    
