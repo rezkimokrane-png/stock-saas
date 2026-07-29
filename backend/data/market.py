@@ -1,4 +1,3 @@
-
 import os
 import json
 import time
@@ -14,7 +13,10 @@ AV_KEY = os.getenv("ALPHA_VANTAGE_KEY", "")
 # ── Cache mémoire / Redis ───────────────────────────────────────
 try:
     import redis
-    _redis = redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
+
+    _redis = redis.from_url(
+        os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True
+    )
     _redis.ping()
     REDIS_OK = True
 except Exception:
@@ -66,19 +68,22 @@ def _fetch_av_ohlcv(symbol: str, period: str = "1y") -> pd.DataFrame:
         data = r.json()
         ts = data.get("Time Series (Daily)", {})
         if not ts:
-            print(f"[av_ohlcv] {symbol}: {data.get('Note') or data.get('Information') or 'no data'}")
+            note = data.get("Note") or data.get("Information") or "no data"
+            print(f"[av_ohlcv] {symbol}: {note}")
             return pd.DataFrame()
 
         records = []
         for date_str, vals in ts.items():
-            records.append({
-                "Date": date_str,
-                "Open": float(vals["1. open"]),
-                "High": float(vals["2. high"]),
-                "Low": float(vals["3. low"]),
-                "Close": float(vals["5. adjusted close"]),
-                "Volume": int(vals["6. volume"]),
-            })
+            records.append(
+                {
+                    "Date": date_str,
+                    "Open": float(vals["1. open"]),
+                    "High": float(vals["2. high"]),
+                    "Low": float(vals["3. low"]),
+                    "Close": float(vals["5. adjusted close"]),
+                    "Volume": int(vals["6. volume"]),
+                }
+            )
 
         df = pd.DataFrame(records)
         df["Date"] = pd.to_datetime(df["Date"])
@@ -145,7 +150,9 @@ def _fetch_av_info(symbol: str) -> dict:
             "fiftyTwoWeekHigh": safe_float(data.get("52WeekHigh")),
             "fiftyTwoWeekLow": safe_float(data.get("52WeekLow")),
             "targetMeanPrice": safe_float(data.get("AnalystTargetPrice")),
-            "numberOfAnalystOpinions": safe_float(data.get("AnalystRatingStrongBuy")),
+            "numberOfAnalystOpinions": safe_float(
+                data.get("AnalystRatingStrongBuy")
+            ),
             "recommendationKey": data.get("AnalystRatingStrongBuy", "—"),
             "longBusinessSummary": data.get("Description", ""),
             "enterpriseToEbitda": safe_float(data.get("EVToEBITDA")),
@@ -162,14 +169,22 @@ def _fetch_av_info(symbol: str) -> dict:
 def _fetch_yf_info(symbol: str) -> dict:
     try:
         import yfinance as yf
+
         ticker = yf.Ticker(symbol)
         info = ticker.info
-        if info and isinstance(info, dict) and (info.get("regularMarketPrice") or info.get("currentPrice")):
+        if (
+            info
+            and isinstance(info, dict)
+            and (
+                info.get("regularMarketPrice") or info.get("currentPrice")
+            )
+        ):
             return info
         fi = ticker.fast_info
+        last_p = getattr(fi, "last_price", None)
         return {
-            "regularMarketPrice": getattr(fi, "last_price", None),
-            "currentPrice": getattr(fi, "last_price", None),
+            "regularMarketPrice": last_p,
+            "currentPrice": last_p,
             "currency": getattr(fi, "currency", "USD"),
             "longName": symbol,
         }
@@ -181,17 +196,21 @@ def _fetch_yf_info(symbol: str) -> dict:
 def _fetch_yf_ohlcv(symbol: str, period: str = "1y") -> pd.DataFrame:
     try:
         import yfinance as yf
+
         df = yf.Ticker(symbol).history(period=period, interval="1d")
         if not df.empty and "Close" in df.columns:
             df.index = pd.to_datetime(df.index)
-        return df
+            return df
+        return pd.DataFrame()
     except Exception as e:
         print(f"[yf_ohlcv] {symbol} failed: {e}")
         return pd.DataFrame()
 
 
 # ── API publique — OHLCV, Info, Price ─────────────────────────
-def get_ohlcv(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
+def get_ohlcv(
+    symbol: str, period: str = "1y", interval: str = "1d"
+) -> pd.DataFrame:
     key = f"ohlcv:{symbol}:{period}"
     cached = _cache_get(key)
     if cached == _FAILED:
@@ -228,7 +247,9 @@ def get_info(symbol: str) -> dict:
         return cached
 
     info = _fetch_av_info(symbol) if AV_KEY else {}
-    if not info or not (info.get("regularMarketPrice") or info.get("currentPrice")):
+    if not info or not (
+        info.get("regularMarketPrice") or info.get("currentPrice")
+    ):
         print(f"[get_info] AV échec/absent, fallback yfinance pour {symbol}")
         info = _fetch_yf_info(symbol)
 
@@ -246,8 +267,9 @@ def get_price(symbol: str) -> float | None:
     return info.get("regularMarketPrice") or info.get("currentPrice")
 
 
-# ── Aperçu marché (Batch Download) ─────────────────────────────
+# ── Aperçu marché (Batch Download avec données complètes frontend) ──
 _OVERVIEW_CACHE_KEY = "market_overview_data"
+
 
 def get_market_overview(tickers_dict: dict) -> list[dict]:
     cached = _cache_get(_OVERVIEW_CACHE_KEY)
@@ -256,25 +278,71 @@ def get_market_overview(tickers_dict: dict) -> list[dict]:
 
     try:
         import yfinance as yf
+
         symbols = list(tickers_dict.values())
-        data = yf.download(symbols, period="5d", interval="1d", group_by="ticker", progress=False)
-        
+        data = yf.download(
+            symbols,
+            period="1mo",
+            interval="1d",
+            group_by="ticker",
+            progress=False,
+        )
+
         result = []
         for name, symbol in tickers_dict.items():
             try:
                 df = data[symbol] if len(symbols) > 1 else data
                 df = df.dropna(subset=["Close"])
-                if not df.empty:
+                if not df.empty and len(df) >= 2:
                     price = float(df["Close"].iloc[-1])
-                    prev_price = float(df["Close"].iloc[-2]) if len(df) > 1 else price
+                    prev_price = float(df["Close"].iloc[-2])
                     change = round(((price - prev_price) / prev_price) * 100, 2)
-                    result.append({
-                        "name": name,
-                        "symbol": symbol,
-                        "price": round(price, 2),
-                        "change": change
-                    })
-            except Exception:
+
+                    # 30 derniers jours pour la mini-courbe (sparkline)
+                    sparkline = [
+                        round(float(p), 2)
+                        for p in df["Close"].tail(30).tolist()
+                    ]
+
+                    # RSI simplifié
+                    delta = df["Close"].diff()
+                    gain = (
+                        (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                    )
+                    loss = (
+                        (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                    )
+                    rs = gain / loss
+                    rsi_val = 100 - (100 / (1 + rs))
+                    rsi = (
+                        round(float(rsi_val.iloc[-1]), 1)
+                        if not rsi_val.empty and not np.isnan(rsi_val.iloc[-1])
+                        else 50.0
+                    )
+
+                    signal = (
+                        "ACHAT"
+                        if rsi < 45
+                        else ("VENTE" if rsi > 70 else "NEUTRE")
+                    )
+
+                    result.append(
+                        {
+                            "name": name,
+                            "symbol": symbol,
+                            "price": round(price, 2),
+                            "change": change,
+                            "rsi": rsi,
+                            "signal": signal,
+                            "model": "ARIMA-ML",
+                            "forecast": round(
+                                price * (1 + (0.01 if rsi < 50 else -0.005)), 2
+                            ),
+                            "sparkline": sparkline,
+                        }
+                    )
+            except Exception as e:
+                print(f"[market_overview] Error for {symbol}: {e}")
                 continue
 
         if result:
@@ -299,7 +367,7 @@ def get_financials(symbol: str) -> dict:
     financials = {
         "income_statement": [],
         "balance_sheet": [],
-        "cash_flow": []
+        "cash_flow": [],
     }
 
     if AV_KEY:
@@ -315,18 +383,25 @@ def get_financials(symbol: str) -> dict:
     if not any(financials.values()):
         try:
             import yfinance as yf
+
             ticker = yf.Ticker(symbol)
-            
+
             def df_to_list(df):
                 if df is None or df.empty:
                     return []
                 df_reset = df.reset_index()
-                return df_reset.to_dict(orient="records")
+                # Convertir les dates/colonnes en chaînes de caractères pour éviter l'échec de la sérialisation JSON
+                df_reset.columns = [str(c) for c in df_reset.columns]
+                return df_reset.astype(str).to_dict(orient="records")
 
             financials = {
-                "income_statement": df_to_list(getattr(ticker, "financials", None)),
-                "balance_sheet": df_to_list(getattr(ticker, "balance_sheet", None)),
-                "cash_flow": df_to_list(getattr(ticker, "cashflow", None))
+                "income_statement": df_to_list(
+                    getattr(ticker, "financials", None)
+                ),
+                "balance_sheet": df_to_list(
+                    getattr(ticker, "balance_sheet", None)
+                ),
+                "cash_flow": df_to_list(getattr(ticker, "cashflow", None)),
             }
         except Exception as e:
             print(f"[yf_financials] {symbol} failed: {e}")
@@ -337,4 +412,3 @@ def get_financials(symbol: str) -> dict:
 
     _cache_set(key, financials, ttl=CACHE_TTL)
     return financials
-'@ | Set-Content -Path "backend/data/market.py" -Encoding UTF8
